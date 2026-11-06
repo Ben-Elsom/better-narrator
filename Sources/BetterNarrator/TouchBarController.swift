@@ -14,7 +14,23 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         static let play = NSTouchBarItem.Identifier("app.betternarrator.play")
         static let forward = NSTouchBarItem.Identifier("app.betternarrator.forward")
         static let gap = NSTouchBarItem.Identifier.fixedSpaceSmall
+        // Copies of the Control Strip's own buttons, shown on the left.
+        static let launchpad = NSTouchBarItem.Identifier("app.betternarrator.sys.launchpad")
+        static let mission = NSTouchBarItem.Identifier("app.betternarrator.sys.mission")
+        static let previous = NSTouchBarItem.Identifier("app.betternarrator.sys.previous")
+        static let media = NSTouchBarItem.Identifier("app.betternarrator.sys.media")
+        static let next = NSTouchBarItem.Identifier("app.betternarrator.sys.next")
+        static let mute = NSTouchBarItem.Identifier("app.betternarrator.sys.mute")
+        static let volume = NSTouchBarItem.Identifier("app.betternarrator.sys.volume")
+        static let brightness = NSTouchBarItem.Identifier("app.betternarrator.sys.brightness")
+        static let close = NSTouchBarItem.Identifier("app.betternarrator.sys.close")
+        static let slider = NSTouchBarItem.Identifier("app.betternarrator.sys.slider")
     }
+
+    /// Which system slider is open in place of the strip, if any.
+    private enum Expanded { case volume, brightness }
+    private var expanded: Expanded?
+    private var collapseTimer: Timer?
 
     var onRead: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -57,7 +73,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private lazy var playButton: NSButton = {
         let b = NSButton(title: "Preparing…", target: self, action: #selector(playTapped))
         b.imagePosition = .imageLeading
-        b.widthAnchor.constraint(greaterThanOrEqualToConstant: 128).isActive = true
+        b.widthAnchor.constraint(greaterThanOrEqualToConstant: 104).isActive = true
         return b
     }()
 
@@ -73,10 +89,19 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
                                                           name: NSWorkspace.didActivateApplicationNotification, object: nil)
     }
 
-    private func symbolButton(_ name: String, _ action: Selector) -> NSButton {
+    private func symbolButton(_ name: String, _ action: Selector, width: CGFloat = 60) -> NSButton {
         let b = NSButton(image: NSImage(systemSymbolName: name, accessibilityDescription: nil)!, target: self, action: action)
-        b.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        b.widthAnchor.constraint(equalToConstant: width).isActive = true
         return b
+    }
+
+    private var systemStrip: [NSTouchBarItem.Identifier] {
+        switch expanded {
+        case .volume?, .brightness?:
+            return [ID.close, ID.slider]
+        case nil:
+            return [ID.launchpad, ID.mission, ID.gap, ID.previous, ID.media, ID.next, ID.gap, ID.mute, ID.volume, ID.brightness]
+        }
     }
 
     // MARK: - What to show
@@ -115,14 +140,14 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     }
 
     private func rebuild() {
-        var ids: [NSTouchBarItem.Identifier] = [.flexibleSpace]
+        var ids: [NSTouchBarItem.Identifier] = systemStrip + [.flexibleSpace]
         if session != nil {
             if offerText != nil { ids += [ID.read, ID.gap, ID.gap] }
             ids += [ID.time, ID.gap, ID.dismiss, ID.gap, ID.gap, ID.back, ID.play, ID.forward]
         } else if offerText != nil {
             ids += [ID.copied, ID.gap, ID.read]
         }
-        if ids.count == 1 {
+        if session == nil && offerText == nil {
             hide()
             return
         }
@@ -158,7 +183,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     // MARK: - Items
 
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
+        if let system = makeSystemItem(identifier) { return system }
         let item = NSCustomTouchBarItem(identifier: identifier)
+        item.visibilityPriority = .high
         switch identifier {
         case ID.read: item.view = readButton
         case ID.copied: item.view = copiedLabel
@@ -170,6 +197,78 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         default: return nil
         }
         return item
+    }
+
+    // MARK: - Control Strip copies
+
+    private func makeSystemItem(_ identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
+        let item = NSCustomTouchBarItem(identifier: identifier)
+        switch identifier {
+        case ID.launchpad:
+            item.view = symbolButton("square.grid.3x2.fill", #selector(launchpadTapped), width: 56)
+            item.visibilityPriority = .low
+        case ID.mission:
+            item.view = symbolButton("rectangle.3.group.fill", #selector(missionTapped), width: 56)
+            item.visibilityPriority = .low
+        case ID.previous: item.view = symbolButton("backward.fill", #selector(previousTapped), width: 56)
+        case ID.media: item.view = symbolButton("playpause.fill", #selector(mediaTapped), width: 56)
+        case ID.next: item.view = symbolButton("forward.fill", #selector(nextTapped), width: 56)
+        case ID.mute: item.view = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 56)
+        case ID.volume: item.view = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 56)
+        case ID.brightness: item.view = symbolButton("sun.max.fill", #selector(brightnessTapped), width: 56)
+        case ID.close: item.view = symbolButton("xmark", #selector(collapseSlider), width: 44)
+        case ID.slider:
+            let slider = NSSliderTouchBarItem(identifier: identifier)
+            let isVolume = expanded == .volume
+            slider.slider.minValue = 0
+            slider.slider.maxValue = 1
+            slider.slider.doubleValue = Double(isVolume ? SystemControls.volume : SystemControls.brightness)
+            slider.minimumValueAccessory = NSSliderAccessory(image: NSImage(systemSymbolName: isVolume ? "speaker.fill" : "sun.min.fill", accessibilityDescription: nil)!)
+            slider.maximumValueAccessory = NSSliderAccessory(image: NSImage(systemSymbolName: isVolume ? "speaker.wave.3.fill" : "sun.max.fill", accessibilityDescription: nil)!)
+            slider.slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+            slider.target = self
+            slider.action = #selector(sliderMoved(_:))
+            slider.visibilityPriority = .normal
+            return slider
+        default:
+            return nil
+        }
+        return item
+    }
+
+    @objc private func launchpadTapped() { SystemControls.launchpad() }
+    @objc private func missionTapped() { SystemControls.missionControl() }
+    @objc private func previousTapped() { SystemControls.press(.previous) }
+    @objc private func mediaTapped() { SystemControls.press(.play) }
+    @objc private func nextTapped() { SystemControls.press(.next) }
+    @objc private func muteTapped() { SystemControls.isMuted.toggle() }
+    @objc private func volumeTapped() { expand(.volume) }
+    @objc private func brightnessTapped() { expand(.brightness) }
+
+    func showVolumeSlider() { expand(.volume) }
+
+    private func expand(_ which: Expanded) {
+        expanded = which
+        bar.defaultItemIdentifiers = []  // force the slider to be rebuilt with fresh values
+        rebuild()
+        scheduleCollapse()
+    }
+
+    @objc private func collapseSlider() {
+        collapseTimer?.invalidate()
+        expanded = nil
+        rebuild()
+    }
+
+    private func scheduleCollapse() {
+        collapseTimer?.invalidate()
+        collapseTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in self?.collapseSlider() }
+    }
+
+    @objc private func sliderMoved(_ sender: NSSliderTouchBarItem) {
+        let v = Float(sender.slider.doubleValue)
+        if expanded == .volume { SystemControls.volume = v } else { SystemControls.brightness = v }
+        scheduleCollapse()
     }
 
     private func refreshControls() {

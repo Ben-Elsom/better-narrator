@@ -282,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "jump-live": s?.following = true
         case "dismiss": dismissActive()
         case "touchbar": touchBar.present()
+        case "touchbar-volume": touchBar.showVolumeSlider()
         case "snapshot":
             // Saves a picture of the reading window (used for testing; needs no screen permission).
             if let v = (s.flatMap { windows[$0.id] } ?? homeWindow)?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
