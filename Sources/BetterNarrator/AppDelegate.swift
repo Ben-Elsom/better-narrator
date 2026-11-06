@@ -10,7 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let selection = SelectionWatcher()
 
     /// What the Touch Bar's Read button will read.
-    private enum Pending { case text(String, fromSelection: Bool), highlight }
+    private enum Pending {
+        case copied(CopiedText)
+        /// Highlighted text; the app's own copy is fetched (with formatting) when Read is pressed.
+        case selection(String?)
+    }
     private var pending: Pending?
     private let nowPlaying = NowPlaying()
     private var statusItem: NSStatusItem!
@@ -35,33 +39,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         engine.onSegment = { [weak self] job, seg in self?.session(forJob: job)?.receive(seg) }
         engine.onJobDone = { [weak self] job in self?.session(forJob: job)?.generationFinished() }
         engine.$status.receive(on: RunLoop.main).sink { [weak self] _ in self?.refreshStatusMenu() }.store(in: &subs)
-        engine.start()
+        Settings.shared.$enabled.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] on in self?.applyEnabled(on) }.store(in: &subs)
+        if Settings.shared.enabled { engine.start() } else { engine.markOff() }
 
         touchBar.onRead = { [weak self] in self?.readOffer() }
         touchBar.onDismiss = { [weak self] in self?.dismissActive() }
 
-        clipboard.onCopy = { [weak self] text in
-            Log.info("copy seen (\(text.count) chars), offering Read")
-            self?.offer(.text(text, fromSelection: false), preview: ReadingDocument(markdown: text).plainText)
+        clipboard.onCopy = { [weak self] copied in
+            Log.info("copy seen (\(copied.text.count) chars\(copied.html != nil ? ", formatted" : "")), offering Read")
+            self?.offer(.copied(copied), preview: ReadingDocument(markdown: copied.text).plainText)
         }
         clipboard.start()
 
         selection.onSelection = { [weak self] text in
-            Log.info("highlight seen (\(text.count) chars), offering Read")
-            self?.offer(.text(text, fromSelection: true), preview: text)
-        }
-        selection.onSelectionUnknown = { [weak self] in
-            Log.info("highlight seen in an app that doesn't share it, offering Read")
-            self?.offer(.highlight, preview: "Highlighted text")
+            Log.info("highlight seen (\(text.map { "\($0.count) chars" } ?? "app doesn't share it")), offering Read")
+            self?.offer(.selection(text), preview: text ?? "Highlighted text")
         }
         selection.onSelectionCleared = { [weak self] in
-            guard let self else { return }
-            switch self.pending {
-            case .text(_, true)?, .highlight?: self.touchBar.withdrawOffer()
-            default: break
-            }
+            guard let self, case .selection? = self.pending else { return }
+            self.touchBar.withdrawOffer()
         }
         selection.start()
+        applyEnabled(Settings.shared.enabled, launching: true)
         touchBar.onOfferExpired = { [weak self] in self?.pending = nil }
 
         nowPlaying.session = { [weak self] in self?.activeSession }
@@ -128,19 +128,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let p = pending else { return }
         touchBar.withdrawOffer()
         switch p {
-        case .text(let text, _):
-            openReading(text)
-        case .highlight:
-            clipboard.copySelection { [weak self] text in
-                guard let text, !text.isEmpty else { NSSound.beep(); return }
-                self?.openReading(text)
+        case .copied(let copied):
+            openReading(copied.forReading)
+        case .selection(let known):
+            // Copy the highlight so its headings, lists and paragraphs come with it.
+            clipboard.copySelection { [weak self] copied in
+                if let copied { self?.openReading(copied.forReading) }
+                else if let known { self?.openReading(known) }
+                else { NSSound.beep() }
             }
         }
     }
 
     @objc func readClipboard() {
-        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { NSSound.beep(); return }
-        openReading(text)
+        guard Settings.shared.enabled else { NSSound.beep(); return }
+        guard let copied = ClipboardWatcher.read() else { NSSound.beep(); return }
+        openReading(copied.forReading)
+    }
+
+    // MARK: - On / Off
+
+    @objc func toggleEnabled() { Settings.shared.enabled.toggle() }
+
+    /// Off stops the voice engine and stops watching copies and highlights, so
+    /// Better Narrator uses no CPU and little memory until it's turned on again.
+    private func applyEnabled(_ on: Bool, launching: Bool = false) {
+        clipboard.isEnabled = on
+        selection.isEnabled = on
+        if on {
+            if !launching && engine.status == .off { engine.start() }
+        } else {
+            touchBar.withdrawOffer()
+            for w in Array(windows.values) { w.close() }
+            touchBar.show(session: nil)
+            engine.stop()
+        }
+        statusItem?.button?.appearsDisabled = !on
+        if !launching { Log.info("Better Narrator turned \(on ? "on" : "off")") }
     }
 
     @objc func readSelection() {
@@ -150,9 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             Log.info("asked for Accessibility permission")
             return
         }
-        clipboard.copySelection { [weak self] text in
-            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { NSSound.beep(); return }
-            self?.openReading(text)
+        guard Settings.shared.enabled else { NSSound.beep(); return }
+        clipboard.copySelection { [weak self] copied in
+            guard let copied else { NSSound.beep(); return }
+            self?.openReading(copied.forReading)
         }
     }
 
@@ -275,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch host {
         case "read-clipboard": readClipboard()
         case "offer-clipboard":
-            if let t = NSPasteboard.general.string(forType: .string) { offer(.text(t, fromSelection: false), preview: t) }
+            if let c = ClipboardWatcher.read() { offer(.copied(c), preview: c.text) }
         case "read-offer": readOffer()
         case "toggle": s?.togglePlay()
         case "play": s?.play()
@@ -288,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "dismiss": dismissActive()
         case "touchbar": touchBar.present()
         case "touchbar-volume": touchBar.showVolumeSlider()
+        case "power": Settings.shared.enabled = (q["on"] ?? "1") != "0"
         case "snapshot":
             // Saves a picture of the reading window (used for testing; needs no screen permission).
             if let v = (s.flatMap { windows[$0.id] } ?? homeWindow)?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
@@ -328,6 +354,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let status = NSMenuItem(title: statusLine, action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
+        let power = item(Settings.shared.enabled ? "Turn Off Better Narrator" : "Turn On Better Narrator",
+                         #selector(toggleEnabled), image: "power")
+        menu.addItem(power)
         menu.addItem(.separator())
         menu.addItem(item("Read Clipboard Aloud", #selector(readClipboard), image: "doc.on.clipboard"))
         let sel = item("Read Selected Text", #selector(readSelection), image: "text.cursor")
@@ -387,6 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if let s = activeSession { return sessions.count > 1 ? "\(sessions.count) readings open" : "Reading: \(s.document.title)" }
             return "Ready: copy text, then tap Read"
         case .failed(let m): return m
+        case .off: return "Off: not listening, using no power"
         }
     }
 

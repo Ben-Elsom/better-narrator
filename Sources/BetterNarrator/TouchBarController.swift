@@ -320,6 +320,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func trayTapped() { present() }
 
     @objc private func dismissTapped() {
+        Log.info("Touch Bar: dismiss")
+        onDismiss?()
+    }
+
+    @objc private func dismissTappedTwice() {
         if !dismissArmed {
             dismissArmed = true
             dismissButton.title = "Tap again to close"

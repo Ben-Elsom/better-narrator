@@ -69,6 +69,10 @@ final class Settings: ObservableObject {
     }
     let skipSeconds: Double = 15
     /// Off by default: Read just starts talking, and the window opens from the menu bar.
+    /// On/Off for the whole app. Off: no voice engine, no watching copies or highlights.
+    @Published var enabled: Bool {
+        didSet { UserDefaults.standard.set(enabled, forKey: "enabled") }
+    }
     @Published var showWindowOnRead: Bool {
         didSet { UserDefaults.standard.set(showWindowOnRead, forKey: "showWindowOnRead") }
     }
@@ -78,6 +82,7 @@ final class Settings: ObservableObject {
         let s = UserDefaults.standard.double(forKey: "speed")
         speed = s > 0 ? s : 1.0
         showWindowOnRead = UserDefaults.standard.bool(forKey: "showWindowOnRead")
+        enabled = UserDefaults.standard.object(forKey: "enabled") as? Bool ?? true
     }
 
     var voiceName: String {

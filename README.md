@@ -10,7 +10,7 @@ Everything runs on your Mac and works offline. The voice is [Kokoro-82M](https:/
 2. **Highlight** text in any app (once Accessibility is allowed, see below), or **copy** it with Claude's Copy button or ⌘C. A blue **Read** button appears on the right of the Touch Bar for 10 seconds. Clicking away from a highlight removes it again.
 3. Press **Read**. It starts talking a few seconds later, once enough audio is ready. No window opens: use the Touch Bar controls, or choose **Show Reading Window** from the menu-bar icon to follow the blue highlight. To have the window open every time, tick **Open Window When Reading Starts** in that menu.
 
-Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to offer a Read button.
+Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in the menu-bar icon) when you don't need it. Off stops the voice engine and stops watching copies and highlights, so it uses no CPU. Quitting (⌘Q) does the same.
 
 ### Controls
 
@@ -20,7 +20,7 @@ Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to off
 | Back 15 s | ↺15 | ↺15 | ← or ⌘[ |
 | Forward 15 s | ↻15 | ↻15 | → or ⌘] |
 | Jump to Live | — | button that appears when you scroll away | ⌘L |
-| Dismiss reading | **Dismiss**, tap twice | close the tab | ⌘W |
+| Dismiss reading | **Dismiss** | close the tab | ⌘W |
 | Speed | — | 1× menu (bottom right) | — |
 | Voice | — | voice menu (bottom left) | — |
 
@@ -28,6 +28,7 @@ Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to off
 - **Progress bar:** blue is what you've heard, grey is audio that's ready. Drag to scrub through the ready part.
 - **Several readings** open as tabs. Copying during a reading adds a Read button next to the controls.
 - The **menu-bar icon** also has *Read Clipboard Aloud*, *Read Selected Text* (⌃⌥R), the voice and speed, and *Show Touch Bar Controls* if they ever disappear.
+- **Highlights keep their formatting:** pressing Read on a highlight copies it (then puts your clipboard back), so headings, lists, paragraphs and code come through. Better Narrator doesn't ask web-based apps like Claude to turn on their extra accessibility data, which would cost them CPU.
 - **Text clean-up:** Markdown symbols aren't read out, code blocks are announced as "Code snippet", and passwords copied from a password manager are ignored.
 
 ### Permissions

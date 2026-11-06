@@ -27,6 +27,9 @@ final class ReadingDocument {
 
     init(markdown raw: String) {
         let source = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n").replacingOccurrences(of: "\u{2029}", with: "\n\n")
+            .replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: "\u{200B}", with: "")
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
         let blocks = ReadingDocument.parseBlocks(source)
         let out = NSMutableAttributedString()
         var segs: [Segment] = []
@@ -145,7 +148,12 @@ final class ReadingDocument {
                 }
                 continue
             }
+            // Each line is its own paragraph. Copied text (and Claude's Markdown)
+            // uses a single line break between paragraphs, so joining lines
+            // would run separate paragraphs together.
+            flushPara()
             para.append(trimmed)
+            flushPara()
         }
         if let c = code { blocks.append(Block(kind: .code, lines: c)) }
         flushPara(); flushTable()
@@ -260,8 +268,8 @@ enum Style {
 
     static var bodyParagraph: NSParagraphStyle {
         let p = NSMutableParagraphStyle()
-        p.lineHeightMultiple = 1.28
-        p.paragraphSpacing = 14
+        p.lineHeightMultiple = 1.32
+        p.paragraphSpacing = 18
         return p
     }
 
@@ -282,7 +290,7 @@ enum Style {
     static var listParagraph: NSParagraphStyle {
         let p = NSMutableParagraphStyle()
         p.lineHeightMultiple = 1.28
-        p.paragraphSpacing = 8
+        p.paragraphSpacing = 10
         p.headIndent = 26
         p.firstLineHeadIndent = 6
         p.tabStops = [NSTextTab(textAlignment: .left, location: 26)]

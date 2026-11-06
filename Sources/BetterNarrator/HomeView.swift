@@ -17,6 +17,11 @@ struct HomeView: View {
                 Text("Better Narrator")
                     .font(.system(size: 26, weight: .bold))
                 statusPill
+                Toggle(isOn: $settings.enabled) {
+                    Text(settings.enabled ? "On" : "Off").font(.system(size: 13, weight: .semibold))
+                }
+                .toggleStyle(.switch)
+                .help("Off stops the voice engine and stops watching copies and highlights, so it uses no power.")
             }
             .padding(.top, 34)
             .padding(.bottom, 26)
@@ -64,7 +69,7 @@ struct HomeView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
-            .disabled(engine.status != .ready)
+            .disabled(engine.status != .ready || !settings.enabled)
             .padding(.horizontal, 28)
             .padding(.top, 22)
 
@@ -105,6 +110,9 @@ struct HomeView: View {
             case .ready:
                 Circle().fill(Color.green).frame(width: 8, height: 8)
                 Text("Ready: copy something to begin")
+            case .off:
+                Circle().fill(Color.secondary).frame(width: 8, height: 8)
+                Text("Off: not listening, using no power")
             case .failed(let message):
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(message).lineLimit(2)

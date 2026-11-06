@@ -100,23 +100,23 @@ final class Permissions: ObservableObject {
 // MARK: - Highlighted text
 
 /// Notices when you highlight text in another app (by dragging, double- or
-/// triple-clicking, or with the keyboard) and reports what's highlighted.
+/// triple-clicking, or with the keyboard). Native apps say what's highlighted;
+/// for apps that don't (Claude and other web-based apps), Read copies the
+/// highlight when you press it.
 final class SelectionWatcher {
-    var onSelection: ((String) -> Void)?
-    var onSelectionUnknown: (() -> Void)?
+    var isEnabled = true
+    var onSelection: ((String?) -> Void)?
     var onSelectionCleared: (() -> Void)?
 
     private var monitors: [Any] = []
     private var downPoint: NSPoint = .zero
     private var dragged = false
-    private var lastText = ""
-    private var electronEnabled: Set<pid_t> = []
+    private var offered = false
 
     func start() {
-        let m1 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
+        let m1 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
             self?.downPoint = NSEvent.mouseLocation
             self?.dragged = false
-            _ = e
         }
         let m2 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             guard let self else { return }
@@ -126,7 +126,10 @@ final class SelectionWatcher {
         let m3 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] e in
             guard let self else { return }
             let selecting = self.dragged || e.clickCount >= 2
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.check(expectSelection: selecting) }
+            let inTitleBar = self.isInTitleBar(self.downPoint)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                self.check(expectSelection: selecting && !inTitleBar)
+            }
         }
         let m4 = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp]) { [weak self] e in
             // Shift+arrows, or ⌘A
@@ -139,47 +142,39 @@ final class SelectionWatcher {
     }
 
     private func check(expectSelection: Bool) {
-        guard AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication,
+        guard isEnabled, AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-        guard let raw = selectedText(in: app) else {
-            // This app doesn't say what's highlighted. After a drag or double-click,
-            // offer Read anyway; pressing it copies the highlight first.
-            if expectSelection && mouseIsOverText(app) { lastText = "?"; onSelectionUnknown?() }
-            return
-        }
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.rangeOfCharacter(from: .letters) != nil {
-            guard text != lastText || expectSelection else { return }
-            lastText = text
-            onSelection?(text)
-        } else if !lastText.isEmpty {
-            lastText = ""
+        let known = selectedText(in: app)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let known, known.rangeOfCharacter(from: .letters) != nil {
+            offered = true
+            onSelection?(known)
+        } else if known == nil && expectSelection {
+            // The app doesn't say what's highlighted; offer Read and copy on press.
+            offered = true
+            onSelection?(nil)
+        } else if offered {
+            offered = false
             onSelectionCleared?()
         }
     }
 
-    /// True when the pointer is over text (not, say, a window's title bar being dragged).
-    private func mouseIsOverText(_ app: NSRunningApplication) -> Bool {
-        let p = NSEvent.mouseLocation
+    /// True when a drag started in the top strip of the front window (moving the window).
+    private func isInTitleBar(_ p: NSPoint) -> Bool {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+              let win = list.first(where: { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }),
+              let b = win[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
         let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        var element: AXUIElement?
-        let system = AXUIElementCreateSystemWide()
-        guard AXUIElementCopyElementAtPosition(system, Float(p.x), Float(screenHeight - p.y), &element) == .success,
-              let el = element else { return false }
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
-        let textRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXTextField", "AXWebArea", "AXHeading", "AXLink", "AXListItem", "AXParagraph"]
-        return textRoles.contains(role as? String ?? "")
+        let y = screenHeight - p.y  // flip to window-list coordinates
+        let x = p.x
+        let minX = b["X"] ?? 0, minY = b["Y"] ?? 0, w = b["Width"] ?? 0
+        return x >= minX && x <= minX + w && y >= minY && y <= minY + 30
     }
 
+    /// The highlighted text, if the app shares it. Doesn't ask web-based apps
+    /// to turn on their extra accessibility data, which costs them CPU.
     private func selectedText(in app: NSRunningApplication) -> String? {
         let el = AXUIElementCreateApplication(app.processIdentifier)
-        // Electron and Chrome-based apps (like Claude) only share their page
-        // text with accessibility tools once asked.
-        if !electronEnabled.contains(app.processIdentifier) {
-            AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            electronEnabled.insert(app.processIdentifier)
-        }
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let f = focused, CFGetTypeID(f) == AXUIElementGetTypeID() else { return nil }
@@ -191,11 +186,24 @@ final class SelectionWatcher {
 
 // MARK: - Clipboard
 
+struct CopiedText {
+    let text: String
+    let html: String?
+
+    /// The best version for reading: the formatted copy turned into Markdown
+    /// when there is one, otherwise the plain text.
+    var forReading: String {
+        if let html, let md = HTMLImport.markdown(fromHTML: html), md.count >= text.count / 2 { return md }
+        return text
+    }
+}
+
 final class ClipboardWatcher {
+    var isEnabled = true
     private var lastChange = NSPasteboard.general.changeCount
     private var timer: Timer?
-    var ignoreUntilChange: Int?
-    var onCopy: ((String) -> Void)?
+    private var ignoreUpTo: Int?
+    var onCopy: ((CopiedText) -> Void)?
 
     private static let skipTypes: Set<String> = [
         "org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType",
@@ -210,18 +218,31 @@ final class ClipboardWatcher {
         let pb = NSPasteboard.general
         guard pb.changeCount != lastChange else { return }
         lastChange = pb.changeCount
-        if let ignore = ignoreUntilChange, pb.changeCount <= ignore { return }
+        if let ignore = ignoreUpTo, pb.changeCount <= ignore { return }
+        guard isEnabled else { return }
         let types = Set((pb.types ?? []).map(\.rawValue))
         if !types.isDisjoint(with: ClipboardWatcher.skipTypes) { return }  // passwords and the like
-        guard let text = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              text.rangeOfCharacter(from: .letters) != nil else { return }
-        onCopy?(text)
+        guard let copied = ClipboardWatcher.read(pb) else { return }
+        onCopy?(copied)
     }
 
-    /// Presses ⌘C in the front app and returns what it copied.
-    func copySelection(completion: @escaping (String?) -> Void) {
-        let before = NSPasteboard.general.changeCount
-        ignoreUntilChange = before + 1
+    static func read(_ pb: NSPasteboard = .general) -> CopiedText? {
+        guard let text = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.rangeOfCharacter(from: .letters) != nil else { return nil }
+        return CopiedText(text: text, html: pb.string(forType: .html))
+    }
+
+    /// Presses ⌘C in the front app, returns what it copied, then puts the
+    /// clipboard back the way it was.
+    func copySelection(completion: @escaping (CopiedText?) -> Void) {
+        let pb = NSPasteboard.general
+        let saved: [[NSPasteboard.PasteboardType: Data]] = (pb.pasteboardItems ?? []).map { item in
+            var d: [NSPasteboard.PasteboardType: Data] = [:]
+            for t in item.types { if let data = item.data(forType: t) { d[t] = data } }
+            return d
+        }
+        let before = pb.changeCount
+        ignoreUpTo = before + 3
         let src = CGEventSource(stateID: .combinedSessionState)
         let down = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: true)
         let up = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: false)
@@ -232,15 +253,22 @@ final class ClipboardWatcher {
         var tries = 0
         Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { t in
             tries += 1
-            let pb = NSPasteboard.general
+            guard pb.changeCount != before || tries > 20 else { return }
+            t.invalidate()
+            let copied = pb.changeCount != before ? ClipboardWatcher.read(pb) : nil
             if pb.changeCount != before {
-                t.invalidate()
+                // Put back whatever was on the clipboard before.
+                pb.clearContents()
+                let items: [NSPasteboardItem] = saved.map { d in
+                    let item = NSPasteboardItem()
+                    for (t, data) in d { item.setData(data, forType: t) }
+                    return item
+                }
+                if !items.isEmpty { pb.writeObjects(items) }
+                self.ignoreUpTo = pb.changeCount
                 self.lastChange = pb.changeCount
-                completion(pb.string(forType: .string))
-            } else if tries > 20 {
-                t.invalidate()
-                completion(nil)
             }
+            completion(copied)
         }
     }
 }

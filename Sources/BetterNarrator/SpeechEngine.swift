@@ -3,7 +3,7 @@ import Foundation
 /// Runs the Kokoro engine (engine/narrator_engine.py) as a helper process and
 /// talks to it with one JSON message per line.
 final class SpeechEngine: ObservableObject {
-    enum Status: Equatable { case starting, ready, failed(String) }
+    enum Status: Equatable { case starting, ready, failed(String), off }
 
     @Published private(set) var status: Status = .starting
 
@@ -80,8 +80,12 @@ final class SpeechEngine: ObservableObject {
         }
     }
 
+    /// Shows the engine as off without starting it (Better Narrator was left off).
+    func markOff() { status = .off }
+
     func stop() {
         stopping = true
+        status = .off
         send(["cmd": "quit"])
         try? stdin?.close()
         let p = process
@@ -92,7 +96,7 @@ final class SpeechEngine: ObservableObject {
         Log.info("engine exited with \(code)")
         process = nil
         stdin = nil
-        guard !stopping else { return }
+        guard !stopping else { status = .off; return }
         if restarts < 3 {
             restarts += 1
             status = .starting
