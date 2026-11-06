@@ -1,0 +1,8 @@
+.DS_Store
+.claude/
+__pycache__/
+.env
+.venv/
+kokoro_test/
+*.onnx
+voices-*.bin
