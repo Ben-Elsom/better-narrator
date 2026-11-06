@@ -8,8 +8,7 @@ Everything runs on your Mac and works offline. The voice is [Kokoro-82M](https:/
 
 1. Open **Better Narrator** from Applications or Spotlight. Its home window opens, and its icon (lines of text with one word lit up) appears in the menu bar. The voice engine takes a few seconds to warm up.
 2. **Highlight** text in any app (once Accessibility is allowed, see below), or **copy** it with Claude's Copy button or ⌘C. A blue **Read** button appears on the right of the Touch Bar for 10 seconds. Clicking away from a highlight removes it again.
-3. Press **Read**. The reading window opens, paused, while the audio is prepared. The play button fills in as audio gets ready.
-4. Press **Start** on the Touch Bar or in the window.
+3. Press **Read**. It starts talking a few seconds later, once enough audio is ready. No window opens: use the Touch Bar controls, or choose **Show Reading Window** from the menu-bar icon to follow the blue highlight. To have the window open every time, tick **Open Window When Reading Starts** in that menu.
 
 Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to offer a Read button.
 

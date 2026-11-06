@@ -165,11 +165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if session.isPlaying { self.pauseOthers(than: session) }
             if session === self.activeSession { self.nowPlaying.update() }
         }
+        session.startWhenReady = true  // pressing Read means "read it": no extra Start press
         sessions.append(session)
-        homeWindow?.orderOut(nil)
         engine.synthesize(job: session.jobID, voice: session.voice, segments: doc.segments)
         Log.info("reading opened: \(doc.segments.count) segments, \(doc.plainText.count) chars")
-        openWindow(for: session)
+        let show = Settings.shared.showWindowOnRead
+        if show { homeWindow?.orderOut(nil) }
+        openWindow(for: session, show: show)
         setActive(session)
     }
 
@@ -184,7 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         nowPlaying.update()
     }
 
-    private func openWindow(for session: ReadingSession) {
+    /// Creates the reading window. It's only put on screen when `show` is true;
+    /// otherwise it waits for "Show Reading Window" in the menu bar.
+    private func openWindow(for session: ReadingSession, show: Bool) {
         let host = NSHostingView(rootView: ReaderView(session: session))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 680),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -202,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrameAutosaveName("BetterNarratorReader")
         if windows.isEmpty { window.center() }
         windows[session.id] = window
+        guard show else { return }
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -335,6 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         } else {
             menu.addItem(item("Show Reading Window", #selector(showActiveWindow), image: "macwindow"))
         }
+        let showItem = item("Open Window When Reading Starts", #selector(toggleShowWindow))
+        showItem.state = Settings.shared.showWindowOnRead ? .on : .off
+        menu.addItem(showItem)
         let tb = item("Show Touch Bar Controls", #selector(showTouchBar), image: "rectangle.and.hand.point.up.left")
         tb.isEnabled = !sessions.isEmpty
         menu.addItem(tb)
@@ -402,6 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func showTouchBar() { touchBar.present() }
+    @objc private func toggleShowWindow() { Settings.shared.showWindowOnRead.toggle() }
 
     @objc private func togglePlayMenu() { Log.info("menu: play/pause"); activeSession?.togglePlay() }
     @objc private func backMenu() { activeSession?.skip(by: -Settings.shared.skipSeconds) }

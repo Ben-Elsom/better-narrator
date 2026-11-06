@@ -26,6 +26,8 @@ final class ReadingSession: ObservableObject, Identifiable {
     @Published private(set) var currentWord: TimedWord?
     @Published private(set) var currentSegmentRange: NSRange?
     @Published var following = true
+    /// Begin playing as soon as enough audio is ready.
+    var startWhenReady = false
 
     var hasStarted: Bool { state != .preparing && state != .ready }
     var isPlaying: Bool { state == .playing }
@@ -126,7 +128,13 @@ final class ReadingSession: ObservableObject, Identifiable {
             let ahead = generated - position
             readiness = min(1, max(0, ahead / needed))
         }
-        if state == .preparing && canStart { setState(.ready) }
+        if state == .preparing && canStart {
+            setState(.ready)
+            if startWhenReady {
+                startWhenReady = false
+                resume()
+            }
+        }
         if state == .ready && !canStart && !wasReady { setState(.preparing) }
     }
 

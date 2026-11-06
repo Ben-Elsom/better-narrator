@@ -68,11 +68,16 @@ final class Settings: ObservableObject {
         didSet { UserDefaults.standard.set(speed, forKey: "speed") }
     }
     let skipSeconds: Double = 15
+    /// Off by default: Read just starts talking, and the window opens from the menu bar.
+    @Published var showWindowOnRead: Bool {
+        didSet { UserDefaults.standard.set(showWindowOnRead, forKey: "showWindowOnRead") }
+    }
 
     private init() {
         voice = UserDefaults.standard.string(forKey: "voice") ?? "af_heart"
         let s = UserDefaults.standard.double(forKey: "speed")
         speed = s > 0 ? s : 1.0
+        showWindowOnRead = UserDefaults.standard.bool(forKey: "showWindowOnRead")
     }
 
     var voiceName: String {

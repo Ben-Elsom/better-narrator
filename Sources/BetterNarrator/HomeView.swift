@@ -48,8 +48,8 @@ struct HomeView: View {
                         : "Use Claude's Copy button, or highlight a paragraph and press ⌘C.")
                 Step(number: 2, title: "Tap Read on the Touch Bar",
                      detail: "It appears on the right for 10 seconds.")
-                Step(number: 3, title: "Press Start",
-                     detail: "Follow the blue highlight. Use −15, ⏯ and +15 on the Touch Bar.")
+                Step(number: 3, title: "Listen",
+                     detail: "It starts talking in a few seconds. Use −15, ⏯ and +15 on the Touch Bar. To follow the blue highlight, choose Show Reading Window from the menu bar icon.")
             }
             .padding(20)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.045)))
