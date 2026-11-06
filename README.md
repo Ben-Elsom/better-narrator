@@ -33,7 +33,7 @@ Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to off
 
 ### Permissions
 
-- **Highlight to Read** and **⌃⌥R** need *Accessibility* permission (System Settings → Privacy & Security → Accessibility → Better Narrator). The home window has a button that opens the right page. The app isn't signed with a developer certificate, so each rebuild may need it switched off and on again.
+- **Highlight to Read** and **⌃⌥R** need *Accessibility* permission (System Settings → Privacy & Security → Accessibility → Better Narrator). The home window has a button that opens the right page. Builds are signed with a local self-signed certificate ("Better Narrator Local Signing", kept in its own `better-narrator-signing` keychain), so the permission survives rebuilds. Without that certificate the build script signs ad hoc, and the permission needs re-enabling after each build.
 - Copy-then-Read needs no permissions.
 - Dictation apps such as Wispr Flow pause whatever is playing while you dictate, and that includes Better Narrator.
 
