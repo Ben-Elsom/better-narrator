@@ -6,3 +6,5 @@ __pycache__/
 kokoro_test/
 *.onnx
 voices-*.bin
+build/
+Resources/AppIcon_1024.png
