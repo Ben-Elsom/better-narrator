@@ -87,7 +87,21 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </dict>
 </plist>
 EOF
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+# Sign with the local "Better Narrator Local Signing" certificate when it's set up
+# (see README), so macOS remembers the Accessibility permission across rebuilds.
+# Otherwise sign ad hoc, and the permission must be re-enabled after each build.
+SIGN_KC="$HOME/Library/Keychains/better-narrator-signing.keychain-db"
+SIGN_ID=""
+if [[ -f "$SIGN_KC" ]]; then
+  security unlock-keychain -p better-narrator-local "$SIGN_KC" 2>/dev/null || true
+  SIGN_ID=$(security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | awk '/Better Narrator Local Signing/{print $2; exit}')
+fi
+if [[ -n "$SIGN_ID" ]] && codesign --force --deep --sign "$SIGN_ID" "$APP" >/dev/null 2>&1; then
+  echo "  signed with Better Narrator Local Signing"
+else
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+  echo "  signed ad hoc (Accessibility permission will need re-enabling)"
+fi
 
 echo "▸ Voice engine (Python + Kokoro) in $SUPPORT"
 mkdir -p "$SUPPORT"
