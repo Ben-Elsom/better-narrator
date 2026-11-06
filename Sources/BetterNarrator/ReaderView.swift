@@ -177,7 +177,7 @@ struct PlayButton: View {
 
     var body: some View {
         Button {
-            session.togglePlay()
+            Log.info("window: play button"); session.togglePlay()
         } label: {
             ZStack {
                 Circle()

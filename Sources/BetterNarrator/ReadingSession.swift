@@ -36,7 +36,7 @@ final class ReadingSession: ObservableObject, Identifiable {
     private var segmentTimes: [(range: NSRange, start: Double, end: Double)] = []
     private var charsGenerated = 0
     private let totalChars: Int
-    private var genRate: Double = 1.6         // seconds of audio made per second, measured as we go
+    private var genRate: Double = 1.3         // seconds of audio made per second, measured as we go
     private var secondsPerChar: Double = 0.068 // refined from real audio
     private let player = AudioPlayer()
     private var ticker: Timer?
@@ -119,7 +119,9 @@ final class ReadingSession: ObservableObject, Identifiable {
             let p = Settings.shared.speed
             let r = max(0.2, genRate)
             let remaining = max(0, estimatedTotal - generated)
-            var needed = 2.0
+            // Keep a few seconds in hand, more until we've measured this Mac's speed.
+            var needed = segmentTimes.count < 3 ? 4.5 : 3.0
+            needed = min(needed, estimatedTotal)
             if r < p * 1.1 { needed += remaining * (p / r - 1) * 1.2 }
             let ahead = generated - position
             readiness = min(1, max(0, ahead / needed))
@@ -214,6 +216,7 @@ final class ReadingSession: ObservableObject, Identifiable {
 
     private func setState(_ s: State) {
         guard state != s else { return }
+        Log.info("state \(state) -> \(s) at \(String(format: "%.2f", currentPosition))s")
         state = s
         onStateChange?()
     }

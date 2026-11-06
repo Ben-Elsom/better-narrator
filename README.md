@@ -6,8 +6,8 @@ Everything runs on your Mac and works offline. The voice is [Kokoro-82M](https:/
 
 ## Using it
 
-1. Open **Better Narrator** from Applications or Spotlight. Its icon (lines of text with one word lit up) appears in the menu bar. The voice engine takes a few seconds to warm up.
-2. **Copy** any text, for example with Claude's Copy button or by highlighting a paragraph and pressing ⌘C. A blue **Read** button appears on the right of the Touch Bar for 10 seconds.
+1. Open **Better Narrator** from Applications or Spotlight. Its home window opens, and its icon (lines of text with one word lit up) appears in the menu bar. The voice engine takes a few seconds to warm up.
+2. **Highlight** text in any app (once Accessibility is allowed, see below), or **copy** it with Claude's Copy button or ⌘C. A blue **Read** button appears on the right of the Touch Bar for 10 seconds. Clicking away from a highlight removes it again.
 3. Press **Read**. The reading window opens, paused, while the audio is prepared. The play button fills in as audio gets ready.
 4. Press **Start** on the Touch Bar or in the window.
 
@@ -33,8 +33,9 @@ Quit the app (⌘Q, or from the menu-bar icon) when you don't want copies to off
 
 ### Permissions
 
-- **⌃⌥R (Read Selected Text)** needs *Accessibility* permission (System Settings → Privacy & Security → Accessibility → Better Narrator). macOS asks the first time you use it. Each rebuild of the app may need it granted again.
-- Everything else needs no permissions.
+- **Highlight to Read** and **⌃⌥R** need *Accessibility* permission (System Settings → Privacy & Security → Accessibility → Better Narrator). The home window has a button that opens the right page. The app isn't signed with a developer certificate, so each rebuild may need it switched off and on again.
+- Copy-then-Read needs no permissions.
+- Dictation apps such as Wispr Flow pause whatever is playing while you dictate, and that includes Better Narrator.
 
 ## Limitations
 

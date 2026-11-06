@@ -94,24 +94,25 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         rebuild()
     }
 
-    /// Something was copied: offer a Read button for 10 seconds.
-    func offer(text: String) {
-        offerText = text
-        let plain = ReadingDocument(markdown: text).plainText
-        let preview = plain.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+    /// Something was copied or highlighted: offer a Read button for 10 seconds.
+    func offer(preview raw: String) {
+        offerText = raw
+        let preview = raw.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
         copiedLabel.stringValue = preview.count > 48 ? String(preview.prefix(46)) + "…" : preview
         offerTimer?.invalidate()
         offerTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in self?.withdrawOffer() }
         rebuild()
     }
 
+    var onOfferExpired: (() -> Void)?
+
     func withdrawOffer() {
         offerTimer?.invalidate()
+        guard offerText != nil else { return }
         offerText = nil
+        onOfferExpired?()
         rebuild()
     }
-
-    var pendingOffer: String? { offerText }
 
     private func rebuild() {
         var ids: [NSTouchBarItem.Identifier] = [.flexibleSpace]
@@ -213,10 +214,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     // MARK: - Actions
 
-    @objc private func readTapped() { onRead?() }
-    @objc private func playTapped() { session?.togglePlay() }
-    @objc private func backTapped() { session?.skip(by: -Settings.shared.skipSeconds) }
-    @objc private func forwardTapped() { session?.skip(by: Settings.shared.skipSeconds) }
+    @objc private func readTapped() { Log.info("Touch Bar: read"); onRead?() }
+    @objc private func playTapped() { Log.info("Touch Bar: play/pause"); session?.togglePlay() }
+    @objc private func backTapped() { Log.info("Touch Bar: back"); session?.skip(by: -Settings.shared.skipSeconds) }
+    @objc private func forwardTapped() { Log.info("Touch Bar: forward"); session?.skip(by: Settings.shared.skipSeconds) }
     @objc private func trayTapped() { present() }
 
     @objc private func dismissTapped() {

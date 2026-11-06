@@ -7,6 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let engine = SpeechEngine()
     private let touchBar = TouchBarController()
     private let clipboard = ClipboardWatcher()
+    private let selection = SelectionWatcher()
+
+    /// What the Touch Bar's Read button will read.
+    private enum Pending { case text(String, fromSelection: Bool), highlight }
+    private var pending: Pending?
     private let nowPlaying = NowPlaying()
     private var statusItem: NSStatusItem!
     private var hotKey: HotKey?
@@ -16,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var sessions: [ReadingSession] = []
     private var windows: [UUID: NSWindow] = [:]
     private weak var activeSession: ReadingSession?
+    private var homeWindow: NSWindow?
 
     // MARK: - Launch
 
@@ -34,8 +40,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         touchBar.onRead = { [weak self] in self?.readOffer() }
         touchBar.onDismiss = { [weak self] in self?.dismissActive() }
 
-        clipboard.onCopy = { [weak self] text in self?.touchBar.offer(text: text) }
+        clipboard.onCopy = { [weak self] text in
+            Log.info("copy seen (\(text.count) chars), offering Read")
+            self?.offer(.text(text, fromSelection: false), preview: ReadingDocument(markdown: text).plainText)
+        }
         clipboard.start()
+
+        selection.onSelection = { [weak self] text in
+            Log.info("highlight seen (\(text.count) chars), offering Read")
+            self?.offer(.text(text, fromSelection: true), preview: text)
+        }
+        selection.onSelectionUnknown = { [weak self] in
+            Log.info("highlight seen in an app that doesn't share it, offering Read")
+            self?.offer(.highlight, preview: "Highlighted text")
+        }
+        selection.onSelectionCleared = { [weak self] in
+            guard let self else { return }
+            switch self.pending {
+            case .text(_, true)?, .highlight?: self.touchBar.withdrawOffer()
+            default: break
+            }
+        }
+        selection.start()
+        touchBar.onOfferExpired = { [weak self] in self?.pending = nil }
 
         nowPlaying.session = { [weak self] in self?.activeSession }
 
@@ -50,6 +77,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
                                                      forEventClass: AEEventClass(kInternetEventClass),
                                                      andEventID: AEEventID(kAEGetURL))
+        showHome()
+    }
+
+    /// Shows the home window (how to use it, voice and speed, Read Clipboard).
+    @objc func showHome() {
+        if homeWindow == nil {
+            let host = NSHostingView(rootView: HomeView(engine: engine) { [weak self] in self?.readClipboard() })
+            let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+                             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.contentView = host
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isMovableByWindowBackground = true
+            w.isReleasedWhenClosed = false
+            w.tabbingMode = .disallowed
+            w.delegate = self
+            w.center()
+            homeWindow = w
+        }
+        NSApp.setActivationPolicy(.regular)
+        homeWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ note: Notification) {
@@ -59,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showActiveWindow()
+        if sessions.isEmpty { showHome() } else { showActiveWindow() }
         return true
     }
 
@@ -69,10 +119,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         sessions.first { $0.jobID == job }
     }
 
+    private func offer(_ p: Pending, preview: String) {
+        pending = p
+        touchBar.offer(preview: preview)
+    }
+
     private func readOffer() {
-        guard let text = touchBar.pendingOffer else { return }
+        guard let p = pending else { return }
         touchBar.withdrawOffer()
-        openReading(text)
+        switch p {
+        case .text(let text, _):
+            openReading(text)
+        case .highlight:
+            clipboard.copySelection { [weak self] text in
+                guard let text, !text.isEmpty else { NSSound.beep(); return }
+                self?.openReading(text)
+            }
+        }
     }
 
     @objc func readClipboard() {
@@ -103,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if session === self.activeSession { self.nowPlaying.update() }
         }
         sessions.append(session)
+        homeWindow?.orderOut(nil)
         engine.synthesize(job: session.jobID, voice: session.voice, segments: doc.segments)
         Log.info("reading opened: \(doc.segments.count) segments, \(doc.plainText.count) chars")
         openWindow(for: session)
@@ -162,6 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func windowWillClose(_ note: Notification) {
+        if let w = note.object as? NSWindow, w === homeWindow {
+            if sessions.isEmpty { DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) } }
+            return
+        }
         guard let w = note.object as? NSWindow, let id = windows.first(where: { $0.value === w })?.key,
               let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         let s = sessions.remove(at: idx)
@@ -184,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let mods = e.modifierFlags.intersection([.command, .control, .option])
         guard mods.isEmpty else { return false }
         switch Int(e.keyCode) {
-        case kVK_Space: s.togglePlay(); return true
+        case kVK_Space: Log.info("keyboard: space"); s.togglePlay(); return true
         case kVK_LeftArrow: s.skip(by: -Settings.shared.skipSeconds); return true
         case kVK_RightArrow: s.skip(by: Settings.shared.skipSeconds); return true
         default: return false
@@ -202,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch host {
         case "read-clipboard": readClipboard()
         case "offer-clipboard":
-            if let t = NSPasteboard.general.string(forType: .string) { touchBar.offer(text: t) }
+            if let t = NSPasteboard.general.string(forType: .string) { offer(.text(t, fromSelection: false), preview: t) }
         case "read-offer": readOffer()
         case "toggle": s?.togglePlay()
         case "play": s?.play()
@@ -216,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "touchbar": touchBar.present()
         case "snapshot":
             // Saves a picture of the reading window (used for testing; needs no screen permission).
-            if let s, let v = windows[s.id]?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            if let v = (s.flatMap { windows[$0.id] } ?? homeWindow)?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
                 v.cacheDisplay(in: v.bounds, to: rep)
                 let out = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/BetterNarrator_snapshot.png")
                 try? rep.representation(using: .png, properties: [:])?.write(to: out)
@@ -261,9 +329,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         sel.keyEquivalentModifierMask = [.control, .option]
         menu.addItem(sel)
         menu.addItem(.separator())
-        let show = item("Show Reading Window", #selector(showActiveWindow), image: "macwindow")
-        show.isEnabled = !sessions.isEmpty
-        menu.addItem(show)
+        if sessions.isEmpty {
+            menu.addItem(item("Open Better Narrator", #selector(showHome), image: "macwindow"))
+        } else {
+            menu.addItem(item("Show Reading Window", #selector(showActiveWindow), image: "macwindow"))
+        }
         let tb = item("Show Touch Bar Controls", #selector(showTouchBar), image: "rectangle.and.hand.point.up.left")
         tb.isEnabled = !sessions.isEmpty
         menu.addItem(tb)
@@ -332,7 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc private func showTouchBar() { touchBar.present() }
 
-    @objc private func togglePlayMenu() { activeSession?.togglePlay() }
+    @objc private func togglePlayMenu() { Log.info("menu: play/pause"); activeSession?.togglePlay() }
     @objc private func backMenu() { activeSession?.skip(by: -Settings.shared.skipSeconds) }
     @objc private func forwardMenu() { activeSession?.skip(by: Settings.shared.skipSeconds) }
     @objc private func jumpLiveMenu() { activeSession?.following = true }
