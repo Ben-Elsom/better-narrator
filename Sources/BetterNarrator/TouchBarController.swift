@@ -43,8 +43,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private var sessionSubs: Set<AnyCancellable> = []
     private var offerText: String?
     private var offerTimer: Timer?
-    private var dismissArmed = false
-    private var dismissTimer: Timer?
 
     private lazy var readButton: NSButton = {
         let b = NSButton(title: "Read", image: NSImage(systemSymbolName: "text.bubble.fill", accessibilityDescription: nil)!,
@@ -322,25 +320,5 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func dismissTapped() {
         Log.info("Touch Bar: dismiss")
         onDismiss?()
-    }
-
-    @objc private func dismissTappedTwice() {
-        if !dismissArmed {
-            dismissArmed = true
-            dismissButton.title = "Tap again to close"
-            dismissButton.bezelColor = .systemRed
-            dismissTimer?.invalidate()
-            dismissTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in self?.disarmDismiss() }
-            return
-        }
-        disarmDismiss()
-        onDismiss?()
-    }
-
-    private func disarmDismiss() {
-        dismissArmed = false
-        dismissTimer?.invalidate()
-        dismissButton.title = "Dismiss"
-        dismissButton.bezelColor = nil
     }
 }

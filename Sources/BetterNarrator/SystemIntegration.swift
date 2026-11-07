@@ -243,19 +243,21 @@ final class ClipboardWatcher {
         }
         let before = pb.changeCount
         ignoreUpTo = before + 3
+        Log.info("copying highlight from \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?") (trusted: \(AXIsProcessTrusted()))")
         let src = CGEventSource(stateID: .combinedSessionState)
         let down = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: true)
         let up = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: false)
         down?.flags = .maskCommand
         up?.flags = .maskCommand
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        down?.post(tap: .cgSessionEventTap)
+        up?.post(tap: .cgSessionEventTap)
         var tries = 0
         Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { t in
             tries += 1
-            guard pb.changeCount != before || tries > 20 else { return }
+            guard pb.changeCount != before || tries > 40 else { return }
             t.invalidate()
             let copied = pb.changeCount != before ? ClipboardWatcher.read(pb) : nil
+            Log.info(copied.map { "copied highlight: \($0.text.count) chars\($0.html != nil ? ", formatted" : "")" } ?? "copy got nothing")
             if pb.changeCount != before {
                 // Put back whatever was on the clipboard before.
                 pb.clearContents()

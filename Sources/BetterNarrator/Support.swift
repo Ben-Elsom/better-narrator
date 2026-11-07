@@ -90,6 +90,10 @@ final class Settings: ObservableObject {
     }
 }
 
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
 // MARK: - Formatting
 
 func formatTime(_ seconds: Double) -> String {

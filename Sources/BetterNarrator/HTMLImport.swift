@@ -37,9 +37,12 @@ enum HTMLImport {
             if inCode { lines.append("```"); inCode = false }
 
             if !lists.isEmpty {
-                // Imported list items start with "\t•\t" or "\t1.\t"; drop that marker.
-                let body = inline(attr, range).replacingOccurrences(
-                    of: #"^\s*([•◦▪︎▪\-–·]|\d+[.)])\s+"#, with: "", options: .regularExpression)
+                // Imported list items start with their marker and a tab ("•\t", "1\t",
+                // "1.\t", "a.\t"); drop it, since the reading page draws its own.
+                let body = inline(attr, range)
+                    .replacingOccurrences(of: #"^\s*([•◦▪︎▪\-–·]|[0-9]+[.)]?|[a-zA-Z][.)]?|[ivxlcdmIVXLCDM]+[.)]?)\t\s*"#,
+                                          with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"^\s*([•◦▪︎▪\-–·]|[0-9]+[.)])\s+"#, with: "", options: .regularExpression)
                 let depth = lists.count - 1
                 let indent = String(repeating: "  ", count: depth)
                 let ordered = lists.last?.markerFormat.rawValue.contains("decimal") == true

@@ -23,7 +23,11 @@ final class ReadingDocument {
     private enum BlockKind { case paragraph, heading(Int), bullet, numbered(String), quote, code, table }
     private struct Block { let kind: BlockKind; let lines: [String] }
 
-    private static let maxSegmentLength = 260
+    /// Longest piece of speech, in characters. The first pieces are short so
+    /// talking starts quickly; each later one can be made while the one before plays.
+    private static func maxLength(forSegment n: Int) -> Int {
+        [70, 110, 150][safe: n] ?? 180
+    }
 
     init(markdown raw: String) {
         let source = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
@@ -222,10 +226,17 @@ final class ReadingDocument {
             return true
         }
         if ranges.isEmpty { ranges = [blockRange] }
-        var pieces: [NSRange] = []
-        for r in ranges { pieces.append(contentsOf: split(r, in: full)) }
-        let speakable = pieces.compactMap { trim($0, in: full) }.filter {
-            full.substring(with: $0).rangeOfCharacter(from: .alphanumerics) != nil
+        var speakable: [NSRange] = []
+        for r in ranges {
+            var rest: NSRange? = r
+            while let current = rest {
+                let limit = maxLength(forSegment: segs.count + speakable.count)
+                let (piece, remainder) = splitOnce(current, in: full, limit: limit)
+                if let t = trim(piece, in: full), full.substring(with: t).rangeOfCharacter(from: .alphanumerics) != nil {
+                    speakable.append(t)
+                }
+                rest = remainder
+            }
         }
         for (i, r) in speakable.enumerated() {
             let last = i == speakable.count - 1
@@ -234,22 +245,22 @@ final class ReadingDocument {
         }
     }
 
-    /// Breaks very long sentences at commas or spaces so speech starts sooner.
-    private static func split(_ r: NSRange, in s: NSString) -> [NSRange] {
-        guard r.length > maxSegmentLength else { return [r] }
-        let window = NSRange(location: r.location, length: maxSegmentLength)
+    /// Cuts the first `limit` characters (or fewer) off a sentence, at a comma or
+    /// space where possible. Returns the piece and whatever is left.
+    private static func splitOnce(_ r: NSRange, in s: NSString, limit: Int) -> (NSRange, NSRange?) {
+        guard r.length > limit else { return (r, nil) }
+        let window = NSRange(location: r.location, length: limit)
         var cut = NSNotFound
         for sep in ["; ", ", ", " — ", ": ", " "] {
             let found = s.range(of: sep, options: .backwards, range: window)
-            if found.location != NSNotFound && found.location > r.location + maxSegmentLength / 3 {
+            if found.location != NSNotFound && found.location > r.location + limit / 3 {
                 cut = found.location + found.length
                 break
             }
         }
-        if cut == NSNotFound { cut = r.location + maxSegmentLength }
-        let first = NSRange(location: r.location, length: cut - r.location)
-        let rest = NSRange(location: cut, length: r.location + r.length - cut)
-        return [first] + split(rest, in: s)
+        if cut == NSNotFound { cut = r.location + limit }
+        return (NSRange(location: r.location, length: cut - r.location),
+                NSRange(location: cut, length: r.location + r.length - cut))
     }
 
     private static func trim(_ r: NSRange, in s: NSString) -> NSRange? {

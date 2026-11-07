@@ -87,8 +87,9 @@ final class ReadingSession: ObservableObject, Identifiable {
         generated = Double(samples.count) / AudioPlayer.sampleRate
         charsGenerated += segment.speech.count
         if seg.genSeconds > 0.05 {
-            let r = duration / seg.genSeconds
-            genRate = genRate * 0.7 + r * 0.3
+            let r = min(4, max(0.3, duration / seg.genSeconds))
+            // Trust the first real measurement, then smooth.
+            genRate = segmentTimes.count == 1 ? r : genRate * 0.7 + r * 0.3
         }
         if charsGenerated > 40 {
             secondsPerChar = generated / Double(charsGenerated)
@@ -124,6 +125,13 @@ final class ReadingSession: ObservableObject, Identifiable {
             // Keep a few seconds in hand, more until we've measured this Mac's speed.
             var needed = segmentTimes.count < 3 ? 4.5 : 3.0
             needed = min(needed, estimatedTotal)
+            // The audio in hand must last (at this speed) while the next sentence
+            // is being made, or playback catches up and stops after a long one.
+            let next = segmentTimes.count
+            if next < document.segments.count {
+                let nextAudio = Double(document.segments[next].speech.count) * secondsPerChar
+                needed = max(needed, nextAudio / r * p * 1.25 + 0.5)
+            }
             if r < p * 1.1 { needed += remaining * (p / r - 1) * 1.2 }
             let ahead = generated - position
             readiness = min(1, max(0, ahead / needed))

@@ -314,6 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "touchbar": touchBar.present()
         case "touchbar-volume": touchBar.showVolumeSlider()
         case "power": Settings.shared.enabled = (q["on"] ?? "1") != "0"
+        case "read-selection": readSelection()
+        case "read-offer-selection": offer(.selection(nil), preview: "Highlighted text"); readOffer()
         case "snapshot":
             // Saves a picture of the reading window (used for testing; needs no screen permission).
             if let v = (s.flatMap { windows[$0.id] } ?? homeWindow)?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
