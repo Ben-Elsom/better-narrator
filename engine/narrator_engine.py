@@ -236,7 +236,9 @@ class Engine:
                 last_end = t1
             else:
                 t0 = t1 = last_end
-            words.append([s, e, round(float(t0), 3), round(float(t1), 3)])
+            # The app counts characters in UTF-16 (emoji count as two).
+            words.append([len(text[:s].encode("utf-16-le")) // 2, len(text[:e].encode("utf-16-le")) // 2,
+                          round(float(t0), 3), round(float(t1), 3)])
         return words
 
 

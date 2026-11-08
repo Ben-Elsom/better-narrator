@@ -59,7 +59,7 @@ final class Settings: ObservableObject {
         VoiceOption(id: "bm_george", name: "George", accent: "British"),
         VoiceOption(id: "bm_fable", name: "Fable", accent: "British"),
     ]
-    static let speeds: [Double] = [1.0, 1.25, 1.5, 2.0]
+    static let speeds: [Double] = [1.0, 1.5, 2.0, 3.0, 4.0, 5.0]
 
     @Published var voice: String {
         didSet { UserDefaults.standard.set(voice, forKey: "voice") }
@@ -80,7 +80,8 @@ final class Settings: ObservableObject {
     private init() {
         voice = UserDefaults.standard.string(forKey: "voice") ?? "af_heart"
         let s = UserDefaults.standard.double(forKey: "speed")
-        speed = s > 0 ? s : 1.0
+        // Older versions allowed 1.25; the wheel works in tenths.
+        speed = s > 0 ? min(5, max(1, (s * 10).rounded() / 10)) : 1.0
         showWindowOnRead = UserDefaults.standard.bool(forKey: "showWindowOnRead")
         enabled = UserDefaults.standard.object(forKey: "enabled") as? Bool ?? true
     }
@@ -106,7 +107,7 @@ func formatTime(_ seconds: Double) -> String {
 }
 
 func formatSpeed(_ speed: Double) -> String {
-    speed == speed.rounded() ? "\(Int(speed))×" : "\(speed)×"
+    speed == speed.rounded() ? "\(Int(speed))×" : String(format: "%.1f×", speed)
 }
 
 extension Bundle {

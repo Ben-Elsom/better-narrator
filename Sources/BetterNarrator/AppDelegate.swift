@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         touchBar.onRead = { [weak self] in self?.readOffer() }
         touchBar.onDismiss = { [weak self] in self?.dismissActive() }
+        touchBar.onToggleWindow = { [weak self] in self?.toggleReadingWindow() }
 
         clipboard.onCopy = { [weak self] copied in
             Log.info("copy seen (\(copied.text.count) chars\(copied.html != nil ? ", formatted" : "")), offering Read")
@@ -83,7 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Shows the home window (how to use it, voice and speed, Read Clipboard).
     @objc func showHome() {
         if homeWindow == nil {
-            let host = NSHostingView(rootView: HomeView(engine: engine) { [weak self] in self?.readClipboard() })
+            let host = NSHostingView(rootView: HomeView(engine: engine,
+                                                     readClipboard: { [weak self] in self?.readClipboard() },
+                                                     readAgain: { [weak self] in self?.openReading($0.text) }))
             let w = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
                              styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                              backing: .buffered, defer: false)
@@ -126,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func readOffer() {
         guard let p = pending else { return }
+        touchBar.setProcessing(true)  // set first, so the button never leaves the bar
         touchBar.withdrawOffer()
         switch p {
         case .copied(let copied):
@@ -135,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             clipboard.copySelection { [weak self] copied in
                 if let copied { self?.openReading(copied.forReading) }
                 else if let known { self?.openReading(known) }
-                else { NSSound.beep() }
+                else { self?.touchBar.setProcessing(false); NSSound.beep() }
             }
         }
     }
@@ -183,7 +187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func openReading(_ text: String) {
         let doc = ReadingDocument(markdown: text)
-        guard !doc.segments.isEmpty else { NSSound.beep(); return }
+        guard !doc.segments.isEmpty else { touchBar.setProcessing(false); NSSound.beep(); return }
+        touchBar.setProcessing(true)
+        History.shared.add(title: doc.title, text: text)
         let session = ReadingSession(document: doc, voice: Settings.shared.voice)
         session.onStateChange = { [weak self, weak session] in
             guard let self, let session else { return }
@@ -198,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if show { homeWindow?.orderOut(nil) }
         openWindow(for: session, show: show)
         setActive(session)
+        touchBar.setWindowShown(show)
     }
 
     private func pauseOthers(than session: ReadingSession) {
@@ -226,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.tabbingMode = .preferred
         window.tabbingIdentifier = "BetterNarratorReading"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 420)
+        window.minSize = NSSize(width: 640, height: 420)
         window.delegate = self
         window.setFrameAutosaveName("BetterNarratorReader")
         if windows.isEmpty { window.center() }
@@ -242,6 +249,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.setActivationPolicy(.regular)
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        touchBar.setWindowShown(true)
+    }
+
+    private var readingWindowVisible: Bool {
+        guard let s = activeSession ?? sessions.last, let w = windows[s.id] else { return false }
+        return w.isVisible
+    }
+
+    /// Shows the text with the blue highlight, or puts it away. Reading carries on either way.
+    @objc func toggleReadingWindow() {
+        guard let s = activeSession ?? sessions.last, let w = windows[s.id] else { return }
+        if w.isVisible { hideReadingWindow(w) } else { showActiveWindow() }
+    }
+
+    private func hideReadingWindow(_ w: NSWindow) {
+        w.orderOut(nil)
+        touchBar.setWindowShown(false)
+        if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeKey }) {
+            NSApp.hide(nil)  // gives the keyboard back to the app you were in
+            DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        }
+    }
+
+    /// The window's close button puts the page away. Dismiss is what ends a reading.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard windows.values.contains(where: { $0 === sender }) else { return true }
+        hideReadingWindow(sender)
+        return false
     }
 
     @objc func dismissActive() {
@@ -269,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Log.info("reading closed")
         if activeSession === s || activeSession == nil {
             setActive(sessions.last)
+            touchBar.setWindowShown(readingWindowVisible)
         }
         if sessions.isEmpty {
             DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
@@ -313,6 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "dismiss": dismissActive()
         case "touchbar": touchBar.present()
         case "touchbar-volume": touchBar.showVolumeSlider()
+        case "toggle-window": toggleReadingWindow()
+        case "history": if let i = Int(q["i"] ?? "0"), i < History.shared.items.count { openReading(History.shared.items[i].text) }
         case "power": Settings.shared.enabled = (q["on"] ?? "1") != "0"
         case "read-selection": readSelection()
         case "read-offer-selection": offer(.selection(nil), preview: "Highlighted text"); readOffer()
@@ -369,7 +407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if sessions.isEmpty {
             menu.addItem(item("Open Better Narrator", #selector(showHome), image: "macwindow"))
         } else {
-            menu.addItem(item("Show Reading Window", #selector(showActiveWindow), image: "macwindow"))
+            menu.addItem(item(readingWindowVisible ? "Hide Reading Window" : "Show Reading Window",
+                              #selector(toggleReadingWindow), image: "doc.plaintext"))
+            menu.addItem(item("Stop Reading", #selector(dismissActive), image: "xmark"))
         }
         let showItem = item("Open Window When Reading Starts", #selector(toggleShowWindow))
         showItem.state = Settings.shared.showWindowOnRead ? .on : .off

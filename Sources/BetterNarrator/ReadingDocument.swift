@@ -10,6 +10,84 @@ struct Segment {
     let speech: String
     let pause: Double
     let isCode: Bool
+    /// Places where the speech differs from the page, such as links.
+    var replacements: [SpokenText.Replacement] = []
+
+    /// Where a word of the speech sits on the page, relative to `range`.
+    func pageRange(start: Int, end: Int) -> NSRange {
+        var delta = 0
+        for r in replacements {
+            if start >= r.speech.location && start < NSMaxRange(r.speech) { return r.page }
+            guard start >= NSMaxRange(r.speech) else { break }
+            delta = NSMaxRange(r.page) - NSMaxRange(r.speech)
+        }
+        return NSRange(location: start + delta, length: max(0, end - start))
+    }
+}
+
+/// Makes text sound natural: a link is spoken as its site name ("github dot com"),
+/// with no https, www, slashes or path.
+enum SpokenText {
+    struct Replacement {
+        let speech: NSRange
+        let page: NSRange
+    }
+
+    private static let link = try! NSRegularExpression(
+        pattern: #"(?i)(?<![@\w.-])(?:(?:https?|ftp)://[^\s<>()\[\]"'`]+|www\.[^\s<>()\[\]"'`]+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|ai|dev|app|co|edu|gov|au|uk|nz|ca|me|tv)\b(?:/[^\s<>()\[\]"'`]*)?)"#)
+
+    /// Joins sentences that were split inside a link, such as at the "?" in "a.com/b?c=1".
+    static func keepingLinksWhole(_ ranges: [NSRange], in text: NSString) -> [NSRange] {
+        guard let first = ranges.first, let last = ranges.last else { return ranges }
+        let span = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+        let links = link.matches(in: text as String, range: span).map(\.range)
+        var out: [NSRange] = []
+        for r in ranges {
+            if let prev = out.last, links.contains(where: { $0.location < r.location && NSMaxRange($0) > r.location }) {
+                out[out.count - 1] = NSRange(location: prev.location, length: NSMaxRange(r) - prev.location)
+            } else {
+                out.append(r)
+            }
+        }
+        return out
+    }
+
+    static func make(_ text: String) -> (speech: String, replacements: [Replacement]) {
+        let ns = text as NSString
+        var out = ""
+        var reps: [Replacement] = []
+        var cursor = 0
+        for m in link.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            var r = m.range
+            // Sentence punctuation after a link isn't part of it.
+            while r.length > 0, let u = UnicodeScalar(ns.character(at: NSMaxRange(r) - 1)),
+                  CharacterSet(charactersIn: ".,;:!?").contains(u) {
+                r.length -= 1
+            }
+            guard r.length > 0, let name = siteName(ns.substring(with: r)) else { continue }
+            out += ns.substring(with: NSRange(location: cursor, length: r.location - cursor))
+            let start = (out as NSString).length
+            out += name
+            reps.append(Replacement(speech: NSRange(location: start, length: (name as NSString).length), page: r))
+            cursor = NSMaxRange(r)
+        }
+        out += ns.substring(from: cursor)
+        return (out, reps)
+    }
+
+    /// "https://www.docs.example.com/a/b?c=1" -> "docs dot example dot com"
+    static func siteName(_ link: String) -> String? {
+        var s = link.lowercased()
+        if let scheme = s.range(of: "://") { s = String(s[scheme.upperBound...]) }
+        s = String(s.prefix { !"/?#".contains($0) })
+        if let at = s.lastIndex(of: "@") { s = String(s[s.index(after: at)...]) }
+        s = String(s.prefix { $0 != ":" })
+        if s.hasPrefix("www.") { s.removeFirst(4) }
+        guard !s.isEmpty else { return nil }
+        if s == "localhost" || s == "127.0.0.1" { return "a local address" }
+        if s.allSatisfy({ $0.isNumber || $0 == "." }) { return "a numeric address" }
+        return s.split(separator: ".").joined(separator: " dot ")
+    }
 }
 
 /// Turns copied text (usually Markdown from Claude) into a nicely styled page
@@ -226,6 +304,7 @@ final class ReadingDocument {
             return true
         }
         if ranges.isEmpty { ranges = [blockRange] }
+        ranges = SpokenText.keepingLinksWhole(ranges, in: full)
         var speakable: [NSRange] = []
         for r in ranges {
             var rest: NSRange? = r
@@ -240,8 +319,9 @@ final class ReadingDocument {
         }
         for (i, r) in speakable.enumerated() {
             let last = i == speakable.count - 1
-            segs.append(Segment(index: segs.count, range: r, speech: full.substring(with: r),
-                                pause: last ? pause : 0.12, isCode: false))
+            let spoken = SpokenText.make(full.substring(with: r))
+            segs.append(Segment(index: segs.count, range: r, speech: spoken.speech,
+                                pause: last ? pause : 0.12, isCode: false, replacements: spoken.replacements))
         }
     }
 
@@ -258,7 +338,12 @@ final class ReadingDocument {
                 break
             }
         }
-        if cut == NSNotFound { cut = r.location + limit }
+        if cut == NSNotFound {
+            // One very long word, such as a link: keep it whole.
+            let after = s.range(of: " ", range: NSRange(location: r.location + limit, length: r.length - limit))
+            guard after.location != NSNotFound else { return (r, nil) }
+            cut = after.location + 1
+        }
         return (NSRange(location: r.location, length: cut - r.location),
                 NSRange(location: cut, length: r.location + r.length - cut))
     }

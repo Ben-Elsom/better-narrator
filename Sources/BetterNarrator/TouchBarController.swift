@@ -15,8 +15,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         static let forward = NSTouchBarItem.Identifier("app.betternarrator.forward")
         static let gap = NSTouchBarItem.Identifier.fixedSpaceSmall
         // Copies of the Control Strip's own buttons, shown on the left.
-        static let launchpad = NSTouchBarItem.Identifier("app.betternarrator.sys.launchpad")
-        static let mission = NSTouchBarItem.Identifier("app.betternarrator.sys.mission")
+        static let cat = NSTouchBarItem.Identifier("app.betternarrator.cat")
+        static let wheel = NSTouchBarItem.Identifier("app.betternarrator.wheel")
+        static let window = NSTouchBarItem.Identifier("app.betternarrator.window")
         static let previous = NSTouchBarItem.Identifier("app.betternarrator.sys.previous")
         static let media = NSTouchBarItem.Identifier("app.betternarrator.sys.media")
         static let next = NSTouchBarItem.Identifier("app.betternarrator.sys.next")
@@ -34,10 +35,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     var onRead: (() -> Void)?
     var onDismiss: (() -> Void)?
+    var onToggleWindow: (() -> Void)?
 
     private let bar = NSTouchBar()
-    private var trayItem: NSCustomTouchBarItem!
     private var presented = false
+    private var processing = false
+    private var catView: NSView?
+    /// A live copy of Touch Bar Pet's cat, because macOS shows only one app's bar at a time.
+    private let cat = CatMirrorView()
+    private var settingsSub: AnyCancellable?
 
     private weak var session: ReadingSession?
     private var sessionSubs: Set<AnyCancellable> = []
@@ -48,9 +54,17 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         let b = NSButton(title: "Read", image: NSImage(systemSymbolName: "text.bubble.fill", accessibilityDescription: nil)!,
                          target: self, action: #selector(readTapped))
         b.imagePosition = .imageLeading
-        b.bezelColor = .systemBlue
+        b.widthAnchor.constraint(equalToConstant: 104).isActive = true
         return b
     }()
+    private lazy var wheel: SpeedWheelView = {
+        let w = SpeedWheelView(touchBar: true)
+        w.value = Settings.shared.speed
+        w.onChange = { Settings.shared.speed = $0 }
+        w.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        return w
+    }()
+    private lazy var windowButton = symbolButton("doc.plaintext", #selector(windowTapped), width: 44)
     private lazy var copiedLabel: NSTextField = {
         let l = NSTextField(labelWithString: "")
         l.textColor = .secondaryLabelColor
@@ -65,24 +79,28 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         l.textColor = .secondaryLabelColor
         return l
     }()
-    private lazy var dismissButton = NSButton(title: "Dismiss", target: self, action: #selector(dismissTapped))
-    private lazy var backButton = symbolButton("gobackward.15", #selector(backTapped))
-    private lazy var forwardButton = symbolButton("goforward.15", #selector(forwardTapped))
+    private lazy var dismissButton = symbolButton("xmark", #selector(dismissTapped), width: 44)
+    private lazy var backButton = symbolButton("gobackward.15", #selector(backTapped), width: 50)
+    private lazy var forwardButton = symbolButton("goforward.15", #selector(forwardTapped), width: 50)
     private lazy var playButton: NSButton = {
-        let b = NSButton(title: "Preparing…", target: self, action: #selector(playTapped))
-        b.imagePosition = .imageLeading
-        b.widthAnchor.constraint(greaterThanOrEqualToConstant: 104).isActive = true
+        let b = NSButton(title: "", target: self, action: #selector(playTapped))
+        b.imagePosition = .imageOnly
+        b.widthAnchor.constraint(equalToConstant: 64).isActive = true
         return b
     }()
 
     override init() {
         super.init()
         bar.delegate = self
-        trayItem = NSCustomTouchBarItem(identifier: ID.tray)
-        let trayButton = NSButton(image: NSImage(systemSymbolName: "text.bubble", accessibilityDescription: "Better Narrator")!,
-                                  target: self, action: #selector(trayTapped))
-        trayItem.view = trayButton
-        BNSetControlStripItem(trayItem, true)
+        cat.isPaused = true
+        cat.onAvailabilityChange = { [weak self] available in
+            guard let self else { return }
+            self.setCat(available ? self.cat : nil)
+        }
+        if CatMirrorView.petIsRunning { catView = cat }
+        settingsSub = Settings.shared.$speed.sink { [weak self] s in
+            DispatchQueue.main.async { self?.wheel.value = s }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appSwitched),
                                                           name: NSWorkspace.didActivateApplicationNotification, object: nil)
     }
@@ -98,7 +116,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case .volume?, .brightness?:
             return [ID.close, ID.slider]
         case nil:
-            return [ID.launchpad, ID.mission, ID.gap, ID.previous, ID.media, ID.next, ID.gap, ID.mute, ID.volume, ID.brightness]
+            return [ID.previous, ID.media, ID.next, ID.gap, ID.mute, ID.volume, ID.brightness]
         }
     }
 
@@ -137,25 +155,56 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         rebuild()
     }
 
+    /// Read was pressed: the far-right button says "Processing…" until talking starts.
+    func setProcessing(_ on: Bool) {
+        guard processing != on else { return }
+        processing = on
+        rebuild()
+    }
+
+    /// The live cat from Touch Bar Pet, shown at the far left. Nil when the pet isn't running.
+    func setCat(_ view: NSView?) {
+        catView = view
+        bar.defaultItemIdentifiers = []
+        rebuild()
+    }
+
+    /// Shows whether the reading window is open.
+    func setWindowShown(_ shown: Bool) {
+        windowButton.image = NSImage(systemSymbolName: shown ? "doc.plaintext.fill" : "doc.plaintext", accessibilityDescription: nil)
+        windowButton.bezelColor = shown ? .systemBlue : nil
+    }
+
     private func rebuild() {
-        var ids: [NSTouchBarItem.Identifier] = systemStrip + [.flexibleSpace]
+        // Read always sits at the far right, so it never moves under your finger.
+        var ids: [NSTouchBarItem.Identifier] = (catView != nil ? [ID.cat] : []) + systemStrip + [.flexibleSpace]
         if session != nil {
-            if offerText != nil { ids += [ID.read, ID.gap, ID.gap] }
-            ids += [ID.time, ID.gap, ID.dismiss, ID.gap, ID.gap, ID.back, ID.play, ID.forward]
-        } else if offerText != nil {
+            ids += [ID.wheel, ID.time, ID.window, ID.dismiss, ID.back, ID.play, ID.forward, ID.gap, ID.read]
+        } else if offerText != nil || processing {
             ids += [ID.copied, ID.gap, ID.read]
         }
-        if session == nil && offerText == nil {
+        if session == nil && offerText == nil && !processing {
             hide()
             return
         }
-        bar.defaultItemIdentifiers = ids
+        if bar.defaultItemIdentifiers != ids { bar.defaultItemIdentifiers = ids }
+        refreshRead()
         refreshControls()
-        present()
+        if !presented { present() }
+    }
+
+    private func refreshRead() {
+        readButton.title = processing ? "Processing…" : "Read"
+        readButton.image = processing ? nil : NSImage(systemSymbolName: "text.bubble.fill", accessibilityDescription: nil)
+        let canPress = !processing && offerText != nil
+        readButton.isEnabled = canPress
+        readButton.bezelColor = canPress ? .systemBlue : nil
+        if processing || offerText == nil { copiedLabel.stringValue = processing ? "" : copiedLabel.stringValue }
     }
 
     func present() {
         guard bar.defaultItemIdentifiers.count > 1 else { return }
+        cat.isPaused = false
         if BNPresentSystemModalTouchBar(bar, ID.tray.rawValue) {
             presented = true
         } else {
@@ -166,11 +215,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     func hide() {
         if presented { BNDismissSystemModalTouchBar(bar) }
         presented = false
+        cat.isPaused = true
     }
 
     func shutdown() {
         hide()
-        BNSetControlStripItem(trayItem, false)
     }
 
     @objc private func appSwitched() {
@@ -186,6 +235,12 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         item.visibilityPriority = .high
         switch identifier {
         case ID.read: item.view = readButton
+        case ID.wheel: item.view = wheel
+        case ID.window: item.view = windowButton
+        case ID.cat:
+            guard let catView else { return nil }
+            item.view = catView
+            item.visibilityPriority = .normal
         case ID.copied: item.view = copiedLabel
         case ID.time: item.view = timeLabel
         case ID.dismiss: item.view = dismissButton
@@ -202,18 +257,18 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func makeSystemItem(_ identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         let item = NSCustomTouchBarItem(identifier: identifier)
         switch identifier {
-        case ID.launchpad:
-            item.view = symbolButton("square.grid.3x2.fill", #selector(launchpadTapped), width: 56)
+        case ID.previous:
+            item.view = symbolButton("backward.fill", #selector(previousTapped), width: 44)
             item.visibilityPriority = .low
-        case ID.mission:
-            item.view = symbolButton("rectangle.3.group.fill", #selector(missionTapped), width: 56)
+        case ID.media: item.view = symbolButton("playpause.fill", #selector(mediaTapped), width: 44)
+        case ID.next:
+            item.view = symbolButton("forward.fill", #selector(nextTapped), width: 44)
             item.visibilityPriority = .low
-        case ID.previous: item.view = symbolButton("backward.fill", #selector(previousTapped), width: 56)
-        case ID.media: item.view = symbolButton("playpause.fill", #selector(mediaTapped), width: 56)
-        case ID.next: item.view = symbolButton("forward.fill", #selector(nextTapped), width: 56)
-        case ID.mute: item.view = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 56)
-        case ID.volume: item.view = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 56)
-        case ID.brightness: item.view = symbolButton("sun.max.fill", #selector(brightnessTapped), width: 56)
+        case ID.mute:
+            item.view = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 44)
+            item.visibilityPriority = .low
+        case ID.volume: item.view = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 44)
+        case ID.brightness: item.view = symbolButton("sun.max.fill", #selector(brightnessTapped), width: 44)
         case ID.close: item.view = symbolButton("xmark", #selector(collapseSlider), width: 44)
         case ID.slider:
             let slider = NSSliderTouchBarItem(identifier: identifier)
@@ -234,8 +289,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         return item
     }
 
-    @objc private func launchpadTapped() { SystemControls.launchpad() }
-    @objc private func missionTapped() { SystemControls.missionControl() }
     @objc private func previousTapped() { SystemControls.press(.previous) }
     @objc private func mediaTapped() { SystemControls.press(.play) }
     @objc private func nextTapped() { SystemControls.press(.next) }
@@ -271,31 +324,26 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     private func refreshControls() {
         guard let s = session else { return }
+        if processing && s.state != .preparing && s.state != .ready {
+            processing = false
+            refreshRead()
+        }
+        func symbol(_ name: String) -> NSImage? { NSImage(systemSymbolName: name, accessibilityDescription: nil) }
+        playButton.isEnabled = s.state != .preparing
+        playButton.imagePosition = s.state == .preparing ? .noImage : .imageOnly
+        playButton.title = s.state == .preparing ? "\(Int(s.readiness * 100))%" : ""
         switch s.state {
         case .preparing:
-            playButton.title = "Preparing \(Int(s.readiness * 100))%"
             playButton.image = nil
-            playButton.isEnabled = false
             playButton.bezelColor = nil
-        case .ready:
-            playButton.title = "Start"
-            playButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
-            playButton.isEnabled = true
+        case .ready, .paused:
+            playButton.image = symbol("play.fill")
             playButton.bezelColor = .systemBlue
         case .playing, .buffering:
-            playButton.title = s.state == .buffering ? "Catching up" : "Pause"
-            playButton.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: nil)
-            playButton.isEnabled = true
+            playButton.image = symbol("pause.fill")
             playButton.bezelColor = nil
-        case .paused:
-            playButton.title = "Play"
-            playButton.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
-            playButton.isEnabled = true
-            playButton.bezelColor = .systemBlue
         case .finished:
-            playButton.title = "Replay"
-            playButton.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: nil)
-            playButton.isEnabled = true
+            playButton.image = symbol("arrow.counterclockwise")
             playButton.bezelColor = nil
         }
         backButton.isEnabled = s.hasStarted || s.position > 0
@@ -315,7 +363,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func playTapped() { Log.info("Touch Bar: play/pause"); session?.togglePlay() }
     @objc private func backTapped() { Log.info("Touch Bar: back"); session?.skip(by: -Settings.shared.skipSeconds) }
     @objc private func forwardTapped() { Log.info("Touch Bar: forward"); session?.skip(by: Settings.shared.skipSeconds) }
-    @objc private func trayTapped() { present() }
+    @objc private func windowTapped() { Log.info("Touch Bar: reading window"); onToggleWindow?() }
 
     @objc private func dismissTapped() {
         Log.info("Touch Bar: dismiss")

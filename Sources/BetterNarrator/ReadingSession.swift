@@ -79,7 +79,8 @@ final class ReadingSession: ObservableObject, Identifiable {
             words.append(TimedWord(range: segment.range, start: offset, end: offset + duration))
         } else {
             for w in seg.words {
-                let r = NSRange(location: segment.range.location + w.charStart, length: max(0, w.charEnd - w.charStart))
+                let onPage = segment.pageRange(start: w.charStart, end: w.charEnd)
+                let r = NSRange(location: segment.range.location + onPage.location, length: onPage.length)
                 guard NSMaxRange(r) <= document.text.length else { continue }
                 words.append(TimedWord(range: r, start: offset + w.start, end: offset + w.end))
             }
@@ -133,6 +134,9 @@ final class ReadingSession: ObservableObject, Identifiable {
                 needed = max(needed, nextAudio / r * p * 1.25 + 0.5)
             }
             if r < p * 1.1 { needed += remaining * (p / r - 1) * 1.2 }
+            // At high speeds playback outruns the voice engine whatever we do, so
+            // wait a few seconds at a time rather than for the whole reply.
+            needed = min(needed, 12)
             let ahead = generated - position
             readiness = min(1, max(0, ahead / needed))
         }

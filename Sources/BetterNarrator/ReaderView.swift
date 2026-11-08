@@ -19,7 +19,7 @@ struct ReaderView: View {
             TransportBar(session: session)
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .frame(minWidth: 520, minHeight: 420)
+        .frame(minWidth: 640, minHeight: 420)
     }
 }
 
@@ -82,7 +82,8 @@ struct TransportBar: View {
                     }
                     .disabled(session.generated - session.position < 1)
                 }
-                speedMenu
+                SpeedWheel()
+                    .frame(width: 170, height: 40)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
@@ -131,24 +132,6 @@ struct TransportBar: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Voice")
-    }
-
-    private var speedMenu: some View {
-        Menu {
-            ForEach(Settings.speeds, id: \.self) { s in
-                Button {
-                    settings.speed = s
-                } label: {
-                    if s == settings.speed { Label(formatSpeed(s), systemImage: "checkmark") } else { Text(formatSpeed(s)) }
-                }
-            }
-        } label: {
-            Text(formatSpeed(settings.speed))
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Playback speed")
     }
 }
 

@@ -20,12 +20,16 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 | Back 15 s | ↺15 | ↺15 | ← or ⌘[ |
 | Forward 15 s | ↻15 | ↻15 | → or ⌘] |
 | Jump to Live | — | button that appears when you scroll away | ⌘L |
-| Dismiss reading | **Dismiss** | close the tab | ⌘W |
-| Speed | — | 1× menu (bottom right) | — |
+| Show or hide the text | page button | close button | ⌘W |
+| End the reading | ✕ | menu-bar icon → Stop Reading | |
+| Speed, 1× to 5× in steps of 0.1 | slide the wheel | slide or scroll the wheel | |
 | Voice | — | voice menu (bottom left) | — |
 
 - **Click any word** to jump the audio there.
 - **Progress bar:** blue is what you've heard, grey is audio that's ready. Drag to scrub through the ready part.
+- **History:** the home window keeps the last five readings, so you can play them again after they've left the clipboard. They're stored only on this Mac, in `~/Library/Application Support/Better Narrator/history.json`.
+- **Links** are spoken as the site's name ("anthropic dot com"), with no https, www, slashes or path.
+- **Touch Bar:** Read is always at the far right and says "Processing…" until talking starts. If [Touch Bar Pet](../Touch_Bar_Pet) is running, its cat appears live at the far left, because macOS shows only one app's bar at a time (`CatMirrorView.swift` is copied from that project).
 - **Several readings** open as tabs. Copying during a reading adds a Read button next to the controls.
 - The **menu-bar icon** also has *Read Clipboard Aloud*, *Read Selected Text* (⌃⌥R), the voice and speed, and *Show Touch Bar Controls* if they ever disappear.
 - **Highlights keep their formatting:** pressing Read on a highlight copies it (then puts your clipboard back), so headings, lists, paragraphs and code come through. Better Narrator doesn't ask web-based apps like Claude to turn on their extra accessibility data, which would cost them CPU.
@@ -69,4 +73,4 @@ The script compiles the app with `swiftc`, draws the icons, bundles the model, s
 
 ### Testing hooks
 
-The app accepts `betternarrator://` URLs, which is handy for scripted tests: `read-clipboard`, `play`, `pause`, `toggle`, `skip?by=15`, `seek?t=30`, `speed?x=1.5`, `dismiss`, `state` (writes to `~/Library/Logs/BetterNarrator.log`) and `snapshot` (saves a picture of the reading window).
+The app accepts `betternarrator://` URLs, which is handy for scripted tests: `read-clipboard`, `play`, `pause`, `toggle`, `skip?by=15`, `seek?t=30`, `speed?x=1.5`, `dismiss`, `toggle-window`, `history?i=0`, `state` (writes to `~/Library/Logs/BetterNarrator.log`) and `snapshot` (saves a picture of the reading window).

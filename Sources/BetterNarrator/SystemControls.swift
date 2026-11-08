@@ -3,23 +3,8 @@ import AudioToolbox
 import CoreAudio
 
 /// Working copies of the Control Strip's buttons, so Better Narrator can show
-/// them next to its own controls: Launchpad, Mission Control, media keys,
-/// mute, volume and brightness.
+/// them next to its own controls: media keys, mute, volume and brightness.
 enum SystemControls {
-    // MARK: Apps
-
-    static func launchpad() {
-        open("/System/Applications/Launchpad.app")
-    }
-
-    static func missionControl() {
-        open("/System/Applications/Mission Control.app")
-    }
-
-    private static func open(_ path: String) {
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: .init())
-    }
-
     // MARK: Media keys (the same events the keyboard's F7–F9 keys send)
 
     enum MediaKey: Int32 { case play = 16, next = 17, previous = 18, mute = 7 }
