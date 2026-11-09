@@ -33,6 +33,7 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 - **Several readings** open as tabs. Copying during a reading adds a Read button next to the controls.
 - The **menu-bar icon** also has *Read Clipboard Aloud*, *Read Selected Text* (⌃⌥R), the voice and speed, and *Show Touch Bar Controls* if they ever disappear.
 - **Highlights keep their formatting:** pressing Read on a highlight copies it (then puts your clipboard back), so headings, lists, paragraphs and code come through. Better Narrator doesn't ask web-based apps like Claude to turn on their extra accessibility data, which would cost them CPU.
+- **When Read is offered:** in apps that don't say what's highlighted, such as Claude, a drag or double-click only counts if the text cursor showed, and Shift only counts with an arrow, Home, End, Page Up or Page Down. If an app rewrites the clipboard with the same text, Read stays away unless you clicked or pressed ⌘C or ⌘X in the last 2 seconds.
 - **Text clean-up:** Markdown symbols aren't read out, code blocks are announced as "Code snippet", and passwords copied from a password manager are ignored.
 
 ### Permissions

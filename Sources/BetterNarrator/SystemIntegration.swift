@@ -64,29 +64,51 @@ final class SelectionWatcher {
     private var downPoint: NSPoint = .zero
     private var dragged = false
     private var offered = false
+    /// Whether the text cursor showed during this press. Dragging a scrollbar or
+    /// a window edge shows other cursors, so those don't count as highlighting.
+    private var sawTextCursor = false
+    private var lastCursorCheck = Date.distantPast
+
+    /// Shift plus an arrow, Home, End, Page Up or Page Down extends a highlight. Shift alone doesn't.
+    private static let selectionKeys: Set<Int> = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
+                                                  kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]
+    private static let textCursorImages: [Data] = [NSCursor.iBeam, NSCursor.iBeamCursorForVerticalLayout]
+        .compactMap { $0.image.tiffRepresentation }
+
+    /// If macOS doesn't say which cursor is showing, assume text, so Read isn't lost.
+    private static var textCursorShowing: Bool {
+        guard let image = NSCursor.currentSystem?.image.tiffRepresentation else { return true }
+        return textCursorImages.contains(image)
+    }
 
     func start() {
         let m1 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
             self?.downPoint = NSEvent.mouseLocation
             self?.dragged = false
+            self?.sawTextCursor = SelectionWatcher.textCursorShowing
         }
         let m2 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             guard let self else { return }
             let p = NSEvent.mouseLocation
             if hypot(p.x - self.downPoint.x, p.y - self.downPoint.y) > 6 { self.dragged = true }
+            // A highlight can start in a margin, so keep looking during the drag.
+            if !self.sawTextCursor, Date().timeIntervalSince(self.lastCursorCheck) > 0.1 {
+                self.lastCursorCheck = Date()
+                self.sawTextCursor = SelectionWatcher.textCursorShowing
+            }
         }
         let m3 = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] e in
             guard let self else { return }
-            let selecting = self.dragged || e.clickCount >= 2
+            let selecting = (self.dragged || e.clickCount >= 2) && self.sawTextCursor
             let inTitleBar = self.isInTitleBar(self.downPoint)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 self.check(expectSelection: selecting && !inTitleBar)
             }
         }
         let m4 = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp]) { [weak self] e in
-            // Shift+arrows, or ⌘A
             let isSelectAll = e.modifierFlags.contains(.command) && e.charactersIgnoringModifiers == "a"
-            if e.modifierFlags.contains(.shift) || isSelectAll {
+            let extendsSelection = e.modifierFlags.contains(.shift) && SelectionWatcher.selectionKeys.contains(Int(e.keyCode))
+            if extendsSelection || isSelectAll {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self?.check(expectSelection: true) }
             }
         }
@@ -155,6 +177,9 @@ final class ClipboardWatcher {
     private var lastChange = NSPasteboard.general.changeCount
     private var timer: Timer?
     private var ignoreUpTo: Int?
+    private var monitors: [Any] = []
+    private var lastText = ClipboardWatcher.read()?.text
+    private var lastCopyGesture = Date.distantPast
     var onCopy: ((CopiedText) -> Void)?
 
     private static let skipTypes: Set<String> = [
@@ -164,17 +189,35 @@ final class ClipboardWatcher {
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.check() }
+        // A click (a Copy button or menu) or ⌘C means a copy of the same text is on purpose.
+        let clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            self?.lastCopyGesture = Date()
+        }
+        let keys = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            if e.modifierFlags.contains(.command), ["c", "x"].contains(e.charactersIgnoringModifiers) {
+                self?.lastCopyGesture = Date()
+            }
+        }
+        monitors = [clicks, keys].compactMap { $0 }
     }
 
     private func check() {
         let pb = NSPasteboard.general
         guard pb.changeCount != lastChange else { return }
+        let change = pb.changeCount - lastChange
         lastChange = pb.changeCount
         if let ignore = ignoreUpTo, pb.changeCount <= ignore { return }
         guard isEnabled else { return }
         let types = Set((pb.types ?? []).map(\.rawValue))
         if !types.isDisjoint(with: ClipboardWatcher.skipTypes) { return }  // passwords and the like
         guard let copied = ClipboardWatcher.read(pb) else { return }
+        // Some apps put the clipboard back after using it, which isn't you copying anything.
+        let sameText = copied.text == lastText
+        lastText = copied.text
+        if sameText && Date().timeIntervalSince(lastCopyGesture) > 2 {
+            Log.info("clipboard rewritten with the same text (change +\(change), front app: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")), not offering Read")
+            return
+        }
         onCopy?(copied)
     }
 

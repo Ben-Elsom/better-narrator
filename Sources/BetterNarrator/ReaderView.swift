@@ -40,6 +40,14 @@ struct JumpToLiveButton: View {
             .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
         }
         .buttonStyle(.plain)
+        .onContinuousHover { phase in
+            // The page underneath keeps asking for its text cursor, so set the hand on every move.
+            switch phase {
+            case .active: NSCursor.pointingHand.set()
+            case .ended: NSCursor.arrow.set()
+            }
+        }
+        .onDisappear { NSCursor.arrow.set() }  // clicking removes the button from under the mouse
         .keyboardShortcut("l", modifiers: .command)
         .help("Scroll back to the word being read (⌘L)")
     }
