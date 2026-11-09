@@ -37,7 +37,7 @@ clang -c -fobjc-arc -O2 -mmacosx-version-min=14.0 -I Sources/TouchBarPrivate/inc
 swiftc -O -target x86_64-apple-macos14.0 -enable-bare-slash-regex "${VFS[@]}" \
   -import-objc-header Sources/TouchBarPrivate/include/TouchBarPrivate.h \
   Sources/BetterNarrator/*.swift "$BUILD/obj/TouchBarPrivate.o" \
-  -framework Cocoa -framework AVFoundation -framework MediaPlayer -framework Carbon \
+  -framework Cocoa -framework AVFoundation -framework Carbon \
   -o "$BUILD/obj/BetterNarrator"
 
 echo "▸ Drawing icons"

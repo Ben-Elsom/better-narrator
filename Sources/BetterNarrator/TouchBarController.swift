@@ -8,12 +8,12 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         static let tray = NSTouchBarItem.Identifier("app.betternarrator.tray")
         static let copied = NSTouchBarItem.Identifier("app.betternarrator.copied")
         static let read = NSTouchBarItem.Identifier("app.betternarrator.read")
-        static let time = NSTouchBarItem.Identifier("app.betternarrator.time")
         static let dismiss = NSTouchBarItem.Identifier("app.betternarrator.dismiss")
         static let back = NSTouchBarItem.Identifier("app.betternarrator.back")
         static let play = NSTouchBarItem.Identifier("app.betternarrator.play")
         static let forward = NSTouchBarItem.Identifier("app.betternarrator.forward")
         static let gap = NSTouchBarItem.Identifier.fixedSpaceSmall
+        static let sideGap = NSTouchBarItem.Identifier("app.betternarrator.sidegap")
         // Copies of the Control Strip's own buttons, shown on the left.
         static let cat = NSTouchBarItem.Identifier("app.betternarrator.cat")
         static let wheel = NSTouchBarItem.Identifier("app.betternarrator.wheel")
@@ -32,6 +32,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private enum Expanded { case volume, brightness }
     private var expanded: Expanded?
     private var collapseTimer: Timer?
+    private weak var sliderItem: NSSliderTouchBarItem?
 
     var onRead: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -40,6 +41,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private let bar = NSTouchBar()
     private var presented = false
     private var processing = false
+    private var processingTimeout: Timer?
+    /// The reading that Read just opened. Other open readings don't end the processing.
+    private weak var processingSession: ReadingSession?
     private var catView: NSView?
     /// A live copy of Touch Bar Pet's cat, because macOS shows only one app's bar at a time.
     private let cat = CatMirrorView()
@@ -47,6 +51,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     private weak var session: ReadingSession?
     private var sessionSubs: Set<AnyCancellable> = []
+    private var audioTimer: Timer?
+    private var lastButtonStyle = ""
+    private var sliderShowsMuted: Bool?
+    private var lastSliderMove = Date.distantPast
     private var offerText: String?
     private var offerTimer: Timer?
 
@@ -61,9 +69,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         let w = SpeedWheelView(touchBar: true)
         w.value = Settings.shared.speed
         w.onChange = { Settings.shared.speed = $0 }
-        w.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        // With a reading open, the wheel takes up all the free space, so the buttons to its
+        // right always end at the bar's right edge, whatever fits on the left.
+        w.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        w.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return w
     }()
+    private lazy var wheelFixedWidth = wheel.widthAnchor.constraint(equalToConstant: 190)
+    private lazy var muteButton = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 44)
+    private lazy var volumeButton = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 44)
     private lazy var windowButton = symbolButton("doc.plaintext", #selector(windowTapped), width: 44)
     private lazy var copiedLabel: NSTextField = {
         let l = NSTextField(labelWithString: "")
@@ -71,12 +85,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         l.font = .systemFont(ofSize: 13)
         l.lineBreakMode = .byTruncatingTail
         l.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
-        return l
-    }()
-    private lazy var timeLabel: NSTextField = {
-        let l = NSTextField(labelWithString: "0:00")
-        l.font = .monospacedDigitSystemFont(ofSize: 14, weight: .regular)
-        l.textColor = .secondaryLabelColor
         return l
     }()
     private lazy var dismissButton = symbolButton("xmark", #selector(dismissTapped), width: 44)
@@ -116,7 +124,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case .volume?, .brightness?:
             return [ID.close, ID.slider]
         case nil:
-            return [ID.previous, ID.media, ID.next, ID.gap, ID.mute, ID.volume, ID.brightness]
+            return [ID.previous, ID.media, ID.next, ID.mute, ID.volume, ID.brightness]
         }
     }
 
@@ -124,6 +132,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     func show(session: ReadingSession?) {
         self.session = session
+        if processing { processingSession = session }
         sessionSubs.removeAll()
         if let session {
             session.$state.sink { [weak self] _ in DispatchQueue.main.async { self?.refreshControls() } }.store(in: &sessionSubs)
@@ -155,10 +164,19 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         rebuild()
     }
 
-    /// Read was pressed: the far-right button says "Processing…" until talking starts.
+    /// Read was pressed: Read goes away and ✕ is disabled until talking starts.
     func setProcessing(_ on: Bool) {
         guard processing != on else { return }
         processing = on
+        processingSession = on ? processingSession : nil
+        // If the voice engine never gets going, don't leave ✕ disabled for good.
+        processingTimeout?.invalidate()
+        if on {
+            processingTimeout = Timer.scheduledTimer(withTimeInterval: 45, repeats: false) { [weak self] _ in
+                Log.info("still processing after 45 s, giving ✕ back")
+                self?.setProcessing(false)
+            }
+        }
         rebuild()
     }
 
@@ -176,11 +194,24 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     }
 
     private func rebuild() {
-        // Read always sits at the far right, so it never moves under your finger.
-        var ids: [NSTouchBarItem.Identifier] = (catView != nil ? [ID.cat] : []) + systemStrip + [.flexibleSpace]
-        if session != nil {
-            ids += [ID.wheel, ID.time, ID.window, ID.dismiss, ID.back, ID.play, ID.forward, ID.gap, ID.read]
-        } else if offerText != nil || processing {
+        // Read sits at the far right, and only when there's something to press it for.
+        // Once pressed it goes: the play button shows the progress. Without it, the
+        // reading controls spread out.
+        let showRead = offerText != nil && !processing
+        // While a highlight is being copied there's no reading yet, but the controls show anyway.
+        let showControls = session != nil || processing
+        setRoomy(!showRead)
+        // An open slider takes the free space itself, so it needs no flexible space beside it.
+        var ids: [NSTouchBarItem.Identifier] = (catView != nil ? [ID.cat] : []) + systemStrip
+        if expanded == nil && !showControls { ids.append(.flexibleSpace) }
+        // An open slider gets the free space instead of the wheel.
+        wheelFixedWidth.isActive = expanded != nil
+        if showControls {
+            // The wheel is on the right, where a right hand reaches it most easily.
+            // The larger gap separates the computer's controls from Better Narrator's.
+            ids += [ID.sideGap, ID.dismiss, ID.window, ID.back, ID.play, ID.forward, ID.wheel]
+            if showRead { ids += [ID.gap, ID.read] }
+        } else if offerText != nil {
             ids += [ID.copied, ID.gap, ID.read]
         }
         if session == nil && offerText == nil && !processing {
@@ -193,18 +224,26 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         if !presented { present() }
     }
 
+    private func setRoomy(_ roomy: Bool) {
+        func setWidth(_ view: NSView, _ width: CGFloat) {
+            view.constraints.first { $0.firstAttribute == .width && $0.secondItem == nil }?.constant = width
+        }
+        setWidth(windowButton, roomy ? 52 : 44)
+        setWidth(dismissButton, roomy ? 52 : 44)
+        setWidth(backButton, roomy ? 58 : 50)
+        setWidth(forwardButton, roomy ? 58 : 50)
+        setWidth(playButton, roomy ? 74 : 64)
+    }
+
     private func refreshRead() {
-        readButton.title = processing ? "Processing…" : "Read"
-        readButton.image = processing ? nil : NSImage(systemSymbolName: "text.bubble.fill", accessibilityDescription: nil)
-        let canPress = !processing && offerText != nil
-        readButton.isEnabled = canPress
-        readButton.bezelColor = canPress ? .systemBlue : nil
-        if processing || offerText == nil { copiedLabel.stringValue = processing ? "" : copiedLabel.stringValue }
+        dismissButton.isEnabled = !processing
+        readButton.bezelColor = .systemBlue
     }
 
     func present() {
         guard bar.defaultItemIdentifiers.count > 1 else { return }
         cat.isPaused = false
+        startWatchingAudio()
         if BNPresentSystemModalTouchBar(bar, ID.tray.rawValue) {
             presented = true
         } else {
@@ -216,6 +255,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         if presented { BNDismissSystemModalTouchBar(bar) }
         presented = false
         cat.isPaused = true
+        audioTimer?.invalidate()
+        audioTimer = nil
     }
 
     func shutdown() {
@@ -235,6 +276,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         item.visibilityPriority = .high
         switch identifier {
         case ID.read: item.view = readButton
+        case ID.sideGap:
+            // A real view, because this bar doesn't draw the built-in fixed spaces.
+            let spacer = NSView()
+            spacer.widthAnchor.constraint(equalToConstant: 14).isActive = true
+            item.view = spacer
         case ID.wheel: item.view = wheel
         case ID.window: item.view = windowButton
         case ID.cat:
@@ -242,7 +288,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             item.view = catView
             item.visibilityPriority = .normal
         case ID.copied: item.view = copiedLabel
-        case ID.time: item.view = timeLabel
         case ID.dismiss: item.view = dismissButton
         case ID.back: item.view = backButton
         case ID.play: item.view = playButton
@@ -254,22 +299,30 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     // MARK: - Control Strip copies
 
+    // The bar drops every item of the lowest level at once. ⏪ and ⏩ share a level so
+    // one never goes without the other; mute has its own so it goes last.
+    private static let dropFirst = NSTouchBarItem.Priority(rawValue: -1000)
+    private static let dropLast = NSTouchBarItem.Priority(rawValue: -500)
+
     private func makeSystemItem(_ identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         let item = NSCustomTouchBarItem(identifier: identifier)
         switch identifier {
         case ID.previous:
             item.view = symbolButton("backward.fill", #selector(previousTapped), width: 44)
-            item.visibilityPriority = .low
+            item.visibilityPriority = Self.dropFirst
         case ID.media: item.view = symbolButton("playpause.fill", #selector(mediaTapped), width: 44)
         case ID.next:
             item.view = symbolButton("forward.fill", #selector(nextTapped), width: 44)
-            item.visibilityPriority = .low
+            item.visibilityPriority = Self.dropFirst
         case ID.mute:
-            item.view = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 44)
-            item.visibilityPriority = .low
-        case ID.volume: item.view = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 44)
+            item.view = muteButton
+            item.visibilityPriority = Self.dropLast
+        case ID.volume: item.view = volumeButton
         case ID.brightness: item.view = symbolButton("sun.max.fill", #selector(brightnessTapped), width: 44)
-        case ID.close: item.view = symbolButton("xmark", #selector(collapseSlider), width: 44)
+        case ID.close:
+            // Not an xmark: that's the Dismiss button, which ends the reading.
+            item.view = symbolButton("chevron.left", #selector(collapseSlider), width: 44)
+            item.visibilityPriority = .high
         case ID.slider:
             let slider = NSSliderTouchBarItem(identifier: identifier)
             let isVolume = expanded == .volume
@@ -278,10 +331,16 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             slider.slider.doubleValue = Double(isVolume ? SystemControls.volume : SystemControls.brightness)
             slider.minimumValueAccessory = NSSliderAccessory(image: NSImage(systemSymbolName: isVolume ? "speaker.fill" : "sun.min.fill", accessibilityDescription: nil)!)
             slider.maximumValueAccessory = NSSliderAccessory(image: NSImage(systemSymbolName: isVolume ? "speaker.wave.3.fill" : "sun.max.fill", accessibilityDescription: nil)!)
-            slider.slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+            // The bar drops any item that doesn't fit, so this must fit beside the reading
+            // controls. It grows into whatever room is free.
+            slider.slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
+            slider.slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
             slider.target = self
             slider.action = #selector(sliderMoved(_:))
-            slider.visibilityPriority = .normal
+            slider.visibilityPriority = .high
+            sliderItem = slider
+            sliderShowsMuted = nil
+            refreshAudioStyle()
             return slider
         default:
             return nil
@@ -292,11 +351,29 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func previousTapped() { SystemControls.press(.previous) }
     @objc private func mediaTapped() { SystemControls.press(.play) }
     @objc private func nextTapped() { SystemControls.press(.next) }
-    @objc private func muteTapped() { SystemControls.isMuted.toggle() }
+    @objc private func muteTapped() {
+        SystemControls.isMuted.toggle()
+        Log.info("Touch Bar: mute, now \(SystemControls.isMuted ? "muted" : "on")")
+        refreshAudioStyle()
+    }
     @objc private func volumeTapped() { expand(.volume) }
     @objc private func brightnessTapped() { expand(.brightness) }
 
     func showVolumeSlider() { expand(.volume) }
+    func showBrightnessSlider() { expand(.brightness) }
+
+    /// For testing: presses ✕ as a finger would.
+    func pressDismiss() { dismissButton.performClick(nil) }
+
+    /// For testing: presses the mute button as a finger would.
+    func pressMute() { muteButton.performClick(nil) }
+
+    /// For testing: moves the open slider as a finger would.
+    func moveSlider(to value: Double) {
+        guard let sliderItem else { return Log.info("Touch Bar: no slider on the bar") }
+        sliderItem.slider.doubleValue = value
+        NSApp.sendAction(#selector(sliderMoved(_:)), to: self, from: sliderItem)
+    }
 
     private func expand(_ which: Expanded) {
         expanded = which
@@ -316,17 +393,67 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         collapseTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in self?.collapseSlider() }
     }
 
-    @objc private func sliderMoved(_ sender: NSSliderTouchBarItem) {
-        let v = Float(sender.slider.doubleValue)
+    @objc private func sliderMoved(_ sender: Any?) {
+        guard let v = sliderItem.map({ Float($0.slider.doubleValue) }) else { return }
         if expanded == .volume { SystemControls.volume = v } else { SystemControls.brightness = v }
+        lastSliderMove = Date()
+        refreshAudioStyle()
         scheduleCollapse()
     }
 
+    // MARK: - Muted look
+
+    /// Mute can also change from the keyboard or another app, so keep checking while the bar is up.
+    private func startWatchingAudio() {
+        refreshAudioStyle()
+        guard audioTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.refreshAudioStyle() }
+        RunLoop.main.add(timer, forMode: .common)
+        audioTimer = timer
+    }
+
+    private func refreshAudioStyle() {
+        let muted = SystemControls.isMuted
+        let volume = SystemControls.volume
+        let symbol = muted ? "speaker.slash.fill"
+            : volume < 0.01 ? "speaker.fill"
+            : volume < 0.34 ? "speaker.wave.1.fill"
+            : volume < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
+        let style = "\(muted) \(symbol)"
+        if style != lastButtonStyle {
+            lastButtonStyle = style
+            muteButton.bezelColor = muted ? .systemRed : nil
+            volumeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            volumeButton.contentTintColor = muted ? .secondaryLabelColor : nil
+        }
+        guard expanded == .volume, let sliderItem else { return }
+        if sliderShowsMuted != muted {
+            sliderShowsMuted = muted
+            sliderItem.slider.trackFillColor = muted ? .systemGray : nil
+            sliderItem.minimumValueAccessory = NSSliderAccessory(image: NSImage(systemSymbolName: muted ? "speaker.slash.fill" : "speaker.fill", accessibilityDescription: nil)!)
+        }
+        // Don't fight a finger that's still moving the slider.
+        if Date().timeIntervalSince(lastSliderMove) > 0.5 {
+            sliderItem.slider.doubleValue = muted ? 0 : Double(volume)
+        }
+    }
+
     private func refreshControls() {
+        windowButton.isEnabled = session != nil
+        // Still copying the highlight: the new reading doesn't exist yet.
+        if processing && processingSession == nil {
+            playButton.isEnabled = false
+            playButton.imagePosition = .noImage
+            playButton.image = nil
+            playButton.bezelColor = nil
+            playButton.title = "0%"
+            backButton.isEnabled = false
+            forwardButton.isEnabled = false
+            return
+        }
         guard let s = session else { return }
-        if processing && s.state != .preparing && s.state != .ready {
-            processing = false
-            refreshRead()
+        if processing && s === processingSession && s.state != .preparing && s.state != .ready {
+            setProcessing(false)
         }
         func symbol(_ name: String) -> NSImage? { NSImage(systemSymbolName: name, accessibilityDescription: nil) }
         playButton.isEnabled = s.state != .preparing
@@ -353,7 +480,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     private func refreshTime() {
         guard let s = session else { return }
-        timeLabel.stringValue = formatTime(s.position)
         forwardButton.isEnabled = s.generated - s.position > 1
     }
 

@@ -33,7 +33,8 @@ final class SpeedWheelView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override var intrinsicContentSize: NSSize { frame.size }
+    // Height only: whoever hosts the wheel decides how wide it is.
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: frame.height) }
     override var isFlipped: Bool { false }
 
     // MARK: - Drawing

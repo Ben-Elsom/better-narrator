@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case selection(String?)
     }
     private var pending: Pending?
-    private let nowPlaying = NowPlaying()
     private var statusItem: NSStatusItem!
     private var hotKey: HotKey?
     private var keyMonitor: Any?
@@ -65,7 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         applyEnabled(Settings.shared.enabled, launching: true)
         touchBar.onOfferExpired = { [weak self] in self?.pending = nil }
 
-        nowPlaying.session = { [weak self] in self?.activeSession }
 
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(controlKey | optionKey), id: 1) { [weak self] in
             self?.readSelection()
@@ -129,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func readOffer() {
         guard let p = pending else { return }
-        touchBar.setProcessing(true)  // set first, so the button never leaves the bar
+        touchBar.setProcessing(true)  // set first, so the controls come up with no flicker
         touchBar.withdrawOffer()
         switch p {
         case .copied(let copied):
@@ -194,7 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         session.onStateChange = { [weak self, weak session] in
             guard let self, let session else { return }
             if session.isPlaying { self.pauseOthers(than: session) }
-            if session === self.activeSession { self.nowPlaying.update() }
         }
         session.startWhenReady = true  // pressing Read means "read it": no extra Start press
         sessions.append(session)
@@ -215,7 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         activeSession = session
         touchBar.show(session: session)
         if let session { engine.focus(job: session.jobID) }
-        nowPlaying.update()
     }
 
     /// Creates the reading window. It's only put on screen when `show` is true;
@@ -246,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc func showActiveWindow() {
         guard let s = activeSession ?? sessions.last, let w = windows[s.id] else { return }
+        homeWindow?.orderOut(nil)
         NSApp.setActivationPolicy(.regular)
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -265,11 +262,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func hideReadingWindow(_ w: NSWindow) {
         w.orderOut(nil)
+        homeWindow?.orderOut(nil)  // putting the page away shouldn't reveal the home window behind it
         touchBar.setWindowShown(false)
-        if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeKey }) {
-            NSApp.hide(nil)  // gives the keyboard back to the app you were in
-            DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
-        }
+        leaveIfNothingShowing(except: w)
+    }
+
+    /// With no window left on screen, gives the keyboard back to the app you were in.
+    private func leaveIfNothingShowing(except closing: NSWindow) {
+        guard !NSApp.windows.contains(where: { $0 !== closing && $0.isVisible && $0.canBecomeKey }) else { return }
+        NSApp.hide(nil)
+        DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
     }
 
     /// The window's close button puts the page away. Dismiss is what ends a reading.
@@ -280,8 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func dismissActive() {
-        guard let s = activeSession, let w = windows[s.id] else { return }
-        w.close() // windowWillClose tidies up
+        for w in Array(windows.values) { w.close() }  // windowWillClose tidies up each one
     }
 
     func windowDidBecomeKey(_ note: Notification) {
@@ -302,13 +303,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         engine.cancel(job: s.jobID)
         s.close()
         Log.info("reading closed")
+        if sessions.isEmpty { touchBar.setProcessing(false) }
         if activeSession === s || activeSession == nil {
             setActive(sessions.last)
             touchBar.setWindowShown(readingWindowVisible)
         }
-        if sessions.isEmpty {
-            DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
-        }
+        leaveIfNothingShowing(except: w)
     }
 
     // MARK: - Keys in the reading window
@@ -349,6 +349,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case "dismiss": dismissActive()
         case "touchbar": touchBar.present()
         case "touchbar-volume": touchBar.showVolumeSlider()
+        case "touchbar-mute": touchBar.pressMute()
+        case "touchbar-dismiss": touchBar.pressDismiss()
+        case "touchbar-brightness": touchBar.showBrightnessSlider()
+        case "touchbar-slider": if let v = Double(q["v"] ?? "") { touchBar.moveSlider(to: v) }
         case "toggle-window": toggleReadingWindow()
         case "history": if let i = Int(q["i"] ?? "0"), i < History.shared.items.count { openReading(History.shared.items[i].text) }
         case "power": Settings.shared.enabled = (q["on"] ?? "1") != "0"
@@ -368,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             } else {
                 Log.info("state: no reading open, engine=\(engine.status)")
             }
+            Log.info("windows: home=\(homeWindow?.isVisible ?? false) reading=\(readingWindowVisible) appHidden=\(NSApp.isHidden) active=\(NSApp.isActive)")
         default: break
         }
     }

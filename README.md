@@ -29,7 +29,7 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 - **Progress bar:** blue is what you've heard, grey is audio that's ready. Drag to scrub through the ready part.
 - **History:** the home window keeps the last five readings, so you can play them again after they've left the clipboard. They're stored only on this Mac, in `~/Library/Application Support/Better Narrator/history.json`.
 - **Links** are spoken as the site's name ("anthropic dot com"), with no https, www, slashes or path.
-- **Touch Bar:** Read is always at the far right and says "Processing…" until talking starts. If [Touch Bar Pet](../Touch_Bar_Pet) is running, its cat appears live at the far left, because macOS shows only one app's bar at a time (`CatMirrorView.swift` is copied from that project).
+- **Touch Bar:** Read appears at the far right when there is something to read. Once pressed it goes away, and the play button shows the percentage until talking starts. ✕ ends every open reading, and is disabled during that wait. If [Touch Bar Pet](../Touch_Bar_Pet) is running, its cat appears live at the far left, because macOS shows only one app's bar at a time (`CatMirrorView.swift` is copied from that project).
 - **Several readings** open as tabs. Copying during a reading adds a Read button next to the controls.
 - The **menu-bar icon** also has *Read Clipboard Aloud*, *Read Selected Text* (⌃⌥R), the voice and speed, and *Show Touch Bar Controls* if they ever disappear.
 - **Highlights keep their formatting:** pressing Read on a highlight copies it (then puts your clipboard back), so headings, lists, paragraphs and code come through. Better Narrator doesn't ask web-based apps like Claude to turn on their extra accessibility data, which would cost them CPU.
@@ -44,7 +44,7 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 ## Limitations
 
 - On an Intel Mac, Kokoro makes speech roughly 1.5 to 2.5 times faster than it plays. At 1.5× or 2× speed, or when skipping far ahead in a long reply, the app may need to wait ("Catching up…").
-- The Touch Bar controls use unofficial macOS features (the same ones Pock and MTMR use). They work on macOS 15.8, but a future macOS update could break them. The ⏯ key and Now Playing controls would still work.
+- The Touch Bar controls use unofficial macOS features (the same ones Pock and MTMR use). They work on macOS 15.8, but a future macOS update could break them. Better Narrator leaves the keyboard's ⏯ key and the Now Playing controls to your other apps, so music keeps its own controls. A reading only pauses from its own buttons.
 - Images and diagrams aren't described.
 
 ## Building

@@ -1,54 +1,6 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
-import MediaPlayer
-
-// MARK: - Now Playing (⏯ key, menu bar Now Playing, Touch Bar media controls)
-
-final class NowPlaying {
-    var session: () -> ReadingSession? = { nil }
-
-    init() {
-        let c = MPRemoteCommandCenter.shared()
-        c.togglePlayPauseCommand.addTarget { [weak self] _ in Log.info("media key: toggle"); return self?.with { $0.togglePlay() } ?? .commandFailed }
-        c.playCommand.addTarget { [weak self] _ in Log.info("media key: play"); return self?.with { $0.play() } ?? .commandFailed }
-        c.pauseCommand.addTarget { [weak self] _ in Log.info("media key: pause"); return self?.with { $0.pause() } ?? .commandFailed }
-        c.skipForwardCommand.preferredIntervals = [15]
-        c.skipBackwardCommand.preferredIntervals = [15]
-        c.skipForwardCommand.addTarget { [weak self] _ in self?.with { $0.skip(by: Settings.shared.skipSeconds) } ?? .commandFailed }
-        c.skipBackwardCommand.addTarget { [weak self] _ in self?.with { $0.skip(by: -Settings.shared.skipSeconds) } ?? .commandFailed }
-        c.changePlaybackPositionCommand.addTarget { [weak self] e in
-            guard let e = e as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            return self?.with { $0.seek(to: e.positionTime) } ?? .noActionableNowPlayingItem
-        }
-        c.nextTrackCommand.isEnabled = false
-        c.previousTrackCommand.isEnabled = false
-    }
-
-    private func with(_ f: (ReadingSession) -> Void) -> MPRemoteCommandHandlerStatus {
-        guard let s = session() else { return .noActionableNowPlayingItem }
-        f(s)
-        update()
-        return .success
-    }
-
-    func update() {
-        let center = MPNowPlayingInfoCenter.default()
-        guard let s = session() else {
-            center.nowPlayingInfo = nil
-            center.playbackState = .stopped
-            return
-        }
-        center.nowPlayingInfo = [
-            MPMediaItemPropertyTitle: s.document.title,
-            MPMediaItemPropertyArtist: "Better Narrator · \(Settings.voices.first { $0.id == s.voice }?.name ?? "")",
-            MPMediaItemPropertyPlaybackDuration: max(s.estimatedTotal, s.generated),
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: s.position,
-            MPNowPlayingInfoPropertyPlaybackRate: s.isPlaying ? Settings.shared.speed : 0,
-        ]
-        center.playbackState = s.isPlaying ? .playing : .paused
-    }
-}
 
 // MARK: - Global shortcut (⌃⌥R reads the highlighted text)
 
