@@ -8,9 +8,9 @@
 //     cat.onAvailabilityChange = { available in /* add or remove the item */ }
 //     item.view = cat          // an NSCustomTouchBarItem
 //
-// It is 44pt wide, growing to at most 230pt while a note shows. Touching it pets
-// the real cat, which plays the purr sound. It redraws at most 10 times a second,
-// only while it has a window, and draws nothing if the pet or its sprite is missing.
+// It is 44pt wide, growing to at most 230pt while a note shows. Tapping it opens
+// the Touch Bar Pet window. It redraws at most 10 times a second, only while it has a window,
+// and draws nothing if the pet or its sprite is missing.
 //
 // Self-contained on purpose: copy this one file into the host app. Keep the names
 // below in sync with Touch_Bar_Pet/Sources/main.swift.
@@ -55,16 +55,13 @@ final class CatMirrorView: NSView {
         static let paw = Anim(row: 7, count: 6, fps: 8)
         static let jump = Anim(row: 8, count: 7, fps: 10)
         static let scared = Anim(row: 9, count: 8, fps: 10)
-        static let purr = Anim(row: 10, count: 4, fps: 5)
+        static let contented = Anim(row: 10, count: 4, fps: 5)
     }
 
     private var frames: [[CGImage]] = []
     private var theme = ""
     private var mood = "gone"
     private var note: String?
-    private var purring = false
-    private var localPurrUntil = Date.distantPast
-    private var touching = false
     private var available = false
 
     private var anim = Anims.sit
@@ -72,8 +69,6 @@ final class CatMirrorView: NSView {
     private var frameTime = 0.0
     private var loopsLeft = 3
     private var clock = 0.0
-    private var hearts: [(x: CGFloat, y: CGFloat, age: Double)] = []
-    private var heartWait = 0.0
     private var timer: Timer?
     private var lastTick = Date()
 
@@ -119,7 +114,7 @@ final class CatMirrorView: NSView {
         let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         guard app?.bundleIdentifier == Self.bundleID else { return }
         if note.name == NSWorkspace.didTerminateApplicationNotification {
-            apply(mood: "gone", note: nil, theme: theme, purring: false)
+            apply(mood: "gone", note: nil, theme: theme)
             setAvailable(false)
         } else {
             setAvailable(true)
@@ -132,7 +127,7 @@ final class CatMirrorView: NSView {
         let info = n.userInfo as? [String: Any] ?? [:]
         let newMood = info["mood"] as? String ?? "gone"
         apply(mood: newMood, note: info["note"] as? String,
-              theme: info["theme"] as? String ?? theme, purring: info["purring"] as? String == "1")
+              theme: info["theme"] as? String ?? theme)
         setAvailable(newMood != "gone")
     }
 
@@ -142,36 +137,29 @@ final class CatMirrorView: NSView {
         onAvailabilityChange?(value)
     }
 
-    private func apply(mood newMood: String, note newNote: String?, theme newTheme: String, purring newPurring: Bool) {
+    private func apply(mood newMood: String, note newNote: String?, theme newTheme: String) {
         if newTheme != theme || frames.isEmpty { loadFrames(theme: newTheme) }
         let moodChanged = newMood != mood
-        let purrChanged = newPurring != purring
         let noteChanged = newNote != note
         mood = newMood
         note = newNote
-        purring = newPurring
-        if moodChanged || purrChanged { chooseAnim() }
+        if moodChanged { chooseAnim() }
         if noteChanged { invalidateIntrinsicContentSize() }
         needsDisplay = true
     }
 
-    private var showPurr: Bool { purring || Date() < localPurrUntil }
-
     private func chooseAnim() {
         let next: (Anim, Int)
-        if showPurr {
-            next = (Anims.purr, 1)
-        } else {
-            switch mood {
-            case "working": next = (Anims.walk, 4)
-            case "needs": next = (Anims.paw, 3)
-            case "inactive": next = (Anims.sleep, 10)
-            case "done": next = (Anims.jump, 1)
-            case "alert": next = (Anims.scared, 2)
-            default:
-                let roll = Int.random(in: 0..<10)
-                next = roll < 6 ? (Anims.sit, 3) : roll < 8 ? (Anims.twitch, 2) : (Anims.clean, 2)
-            }
+        switch mood {
+        case "working": next = (Anims.walk, 4)
+        case "needs": next = (Anims.paw, 3)
+        case "inactive": next = (Anims.sleep, 10)
+        case "contented": next = (Anims.contented, 10)
+        case "done": next = (Anims.jump, 1)
+        case "alert": next = (Anims.scared, 2)
+        default:
+            let roll = Int.random(in: 0..<10)
+            next = roll < 6 ? (Anims.sit, 3) : roll < 8 ? (Anims.twitch, 2) : (Anims.clean, 2)
         }
         anim = next.0
         loopsLeft = next.1
@@ -207,8 +195,6 @@ final class CatMirrorView: NSView {
         lastTick = now
         clock += dt
 
-        if (anim == Anims.purr) != showPurr { chooseAnim() }
-
         var redraw = false
         frameTime += dt
         let perFrame = 1 / anim.fps
@@ -223,21 +209,6 @@ final class CatMirrorView: NSView {
             }
         }
 
-        if showPurr {
-            heartWait -= dt
-            if heartWait <= 0 {
-                heartWait = 0.6
-                hearts.append((x: 16 + CGFloat.random(in: -4...8), y: 18, age: 0))
-            }
-            redraw = true
-        }
-        if !hearts.isEmpty {
-            hearts = hearts.compactMap { h in
-                let age = h.age + dt
-                return age < 1.2 ? (x: h.x, y: h.y + CGFloat(dt * 9), age: age) : nil
-            }
-            redraw = true
-        }
         if anim == Anims.sleep { redraw = true }
         if redraw { needsDisplay = true }
     }
@@ -247,10 +218,21 @@ final class CatMirrorView: NSView {
     private var shownNote: String? {
         guard mood != "gone", let note, !note.isEmpty else { return nil }
         let room = Self.maxWidth - Self.idleWidth - 16
-        if text(note).size().width <= room { return note }
-        var cut = note
-        while !cut.isEmpty && text(cut + "…").size().width > room { cut.removeLast() }
-        return cut.trimmingCharacters(in: .whitespaces) + "…"
+        return Self.fit(note, room: room) { self.text($0).size().width }
+    }
+
+    /// Shortens a note to fit, keeping "needs you" whole: that part is the message.
+    /// Keep in sync with BarView.fit in Sources/main.swift.
+    private static func fit(_ note: String, room: CGFloat, width: (String) -> CGFloat) -> String {
+        if width(note) <= room { return note }
+        var head = note
+        var tail = ""
+        if let r = note.range(of: " needs ", options: .backwards), r.lowerBound != note.startIndex {
+            head = String(note[..<r.lowerBound])
+            tail = String(note[r.lowerBound...])
+        }
+        while !head.isEmpty && width(head + "…" + tail) > room { head.removeLast() }
+        return head.trimmingCharacters(in: .whitespaces) + "…" + tail
     }
 
     private func text(_ s: String) -> NSAttributedString {
@@ -269,15 +251,13 @@ final class CatMirrorView: NSView {
               anim.row < frames.count, frameIndex < frames[anim.row].count else { return }
 
         let size = CGFloat(Self.frameSize) * Self.scale
-        let shiver: CGFloat = showPurr && Int(clock * 10) % 2 == 0 ? 0.5 : 0
         ctx.saveGState()
         ctx.interpolationQuality = .none
         ctx.draw(frames[anim.row][frameIndex],
-                 in: CGRect(x: 4 + shiver - Self.artLeft * Self.scale, y: 0, width: size, height: size))
+                 in: CGRect(x: 4 - Self.artLeft * Self.scale, y: 0, width: size, height: size))
         ctx.restoreGState()
 
         if anim == Anims.sleep { drawZs() }
-        for h in hearts { drawHeart(ctx, x: h.x, y: h.y, alpha: CGFloat(1 - h.age / 1.2)) }
         if let shown = shownNote { drawNote(shown) }
     }
 
@@ -289,17 +269,6 @@ final class CatMirrorView: NSView {
                 .foregroundColor: NSColor(white: 0.85, alpha: sin(phase * .pi) * 0.85),
             ])
             s.draw(at: NSPoint(x: 30 + phase * 5, y: 10 + phase * 12))
-        }
-    }
-
-    private func drawHeart(_ ctx: CGContext, x: CGFloat, y: CGFloat, alpha: CGFloat) {
-        let rows = [".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..."]
-        let px: CGFloat = 1
-        ctx.setFillColor(NSColor(srgbRed: 0.93, green: 0.42, blue: 0.53, alpha: alpha).cgColor)
-        for (r, row) in rows.enumerated() {
-            for (c, ch) in row.enumerated() where ch == "X" {
-                ctx.fill(CGRect(x: x + CGFloat(c) * px, y: y + CGFloat(rows.count - 1 - r) * px, width: px, height: px))
-            }
         }
     }
 
@@ -324,22 +293,8 @@ final class CatMirrorView: NSView {
 
     // MARK: Touch
 
-    override func touchesBegan(with event: NSEvent) {
-        guard event.touches(matching: .began, in: self).first != nil else { return }
-        touching = true
-        localPurrUntil = Date().addingTimeInterval(1) // respond at once; the pet confirms
-        chooseAnim()
-        needsDisplay = true
-        post(["command": "pet", "seconds": "30"])
-    }
-
-    override func touchesEnded(with event: NSEvent) { handLifted() }
-    override func touchesCancelled(with event: NSEvent) { handLifted() }
-
-    private func handLifted() {
-        guard touching else { return }
-        touching = false
-        post(["command": "petEnd"])
+    override func touchesEnded(with event: NSEvent) {
+        post(["command": "tap"])
     }
 
     private func post(_ info: [String: String]) {
