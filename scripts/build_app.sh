@@ -92,8 +92,11 @@ EOF
 # Otherwise sign ad hoc, and the permission must be re-enabled after each build.
 SIGN_KC="$HOME/Library/Keychains/better-narrator-signing.keychain-db"
 SIGN_ID=""
+SIGN_PW_FILE="$SUPPORT/signing-keychain-password"  # private to this Mac, never in the repo
 if [[ -f "$SIGN_KC" ]]; then
-  security unlock-keychain -p better-narrator-local "$SIGN_KC" 2>/dev/null || true
+  if [[ -r "$SIGN_PW_FILE" ]]; then
+    security unlock-keychain -p "$(<"$SIGN_PW_FILE")" "$SIGN_KC" 2>/dev/null || true
+  fi
   SIGN_ID=$(security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | awk '/Better Narrator Local Signing/{print $2; exit}')
 fi
 if [[ -n "$SIGN_ID" ]] && codesign --force --deep --sign "$SIGN_ID" "$APP" >/dev/null 2>&1; then
