@@ -45,6 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         touchBar.onRead = { [weak self] in self?.readOffer() }
         touchBar.onDismiss = { [weak self] in self?.dismissActive() }
         touchBar.onToggleWindow = { [weak self] in self?.toggleReadingWindow() }
+        // The page button lights up only while the text is in front, so it notices when
+        // another app (or the home window) is brought over it.
+        let center = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
+                     NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            center.publisher(for: name).receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.refreshWindowButton() }.store(in: &subs)
+        }
 
         clipboard.onCopy = { [weak self] copied in
             Log.info("copy seen (\(copied.text.count) chars\(copied.html != nil ? ", formatted" : "")), offering Read")
@@ -254,10 +262,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return w.isVisible
     }
 
-    /// Shows the text with the blue highlight, or puts it away. Reading carries on either way.
+    /// The reading window is on screen and in front: Better Narrator is the active app and
+    /// the page is its key window, not hidden behind another app or the home window.
+    private var readingWindowInFront: Bool {
+        guard let s = activeSession ?? sessions.last, let w = windows[s.id] else { return false }
+        return w.isVisible && !w.isMiniaturized && NSApp.isActive && !NSApp.isHidden && w.isKeyWindow
+    }
+
+    /// Sets the Touch Bar page button from where the window actually is. Waits a beat so
+    /// the key window and active app have settled after a switch.
+    private func refreshWindowButton() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.touchBar.setWindowShown(self.readingWindowInFront)
+        }
+    }
+
+    /// Brings the text with the blue highlight to the front, or puts it away if it's already
+    /// in front. A window left behind another app is brought forward, not hidden.
+    /// Reading carries on either way.
     @objc func toggleReadingWindow() {
         guard let s = activeSession ?? sessions.last, let w = windows[s.id] else { return }
-        if w.isVisible { hideReadingWindow(w) } else { showActiveWindow() }
+        if readingWindowInFront { hideReadingWindow(w) } else { showActiveWindow() }
     }
 
     private func hideReadingWindow(_ w: NSWindow) {
@@ -286,10 +312,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func windowDidBecomeKey(_ note: Notification) {
+        refreshWindowButton()
         guard let w = note.object as? NSWindow, let id = windows.first(where: { $0.value === w })?.key,
               let s = sessions.first(where: { $0.id == id }), s !== activeSession else { return }
         setActive(s)
     }
+
+    func windowDidResignKey(_ note: Notification) { refreshWindowButton() }
+    func windowDidMiniaturize(_ note: Notification) { refreshWindowButton() }
 
     func windowWillClose(_ note: Notification) {
         if let w = note.object as? NSWindow, w === homeWindow {
@@ -306,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if sessions.isEmpty { touchBar.setProcessing(false) }
         if activeSession === s || activeSession == nil {
             setActive(sessions.last)
-            touchBar.setWindowShown(readingWindowVisible)
+            refreshWindowButton()
         }
         leaveIfNothingShowing(except: w)
     }
@@ -372,7 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             } else {
                 Log.info("state: no reading open, engine=\(engine.status)")
             }
-            Log.info("windows: home=\(homeWindow?.isVisible ?? false) reading=\(readingWindowVisible) appHidden=\(NSApp.isHidden) active=\(NSApp.isActive)")
+            Log.info("windows: home=\(homeWindow?.isVisible ?? false) reading=\(readingWindowVisible) inFront=\(readingWindowInFront) appHidden=\(NSApp.isHidden) active=\(NSApp.isActive)")
         default: break
         }
     }
@@ -412,7 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if sessions.isEmpty {
             menu.addItem(item("Open Better Narrator", #selector(showHome), image: "macwindow"))
         } else {
-            menu.addItem(item(readingWindowVisible ? "Hide Reading Window" : "Show Reading Window",
+            menu.addItem(item(readingWindowInFront ? "Hide Reading Window" : "Show Reading Window",
                               #selector(toggleReadingWindow), image: "doc.plaintext"))
             menu.addItem(item("Stop Reading", #selector(dismissActive), image: "xmark"))
         }

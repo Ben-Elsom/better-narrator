@@ -20,7 +20,7 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 | Back 15 s | ↺15 | ↺15 | ← or ⌘[ |
 | Forward 15 s | ↻15 | ↻15 | → or ⌘] |
 | Jump to Live | — | button that appears when you scroll away | ⌘L |
-| Show or hide the text | page button | close button | ⌘W |
+| Show or hide the text | page button (lit while the text is in front; if it's behind another window, one press brings it back) | close button | ⌘W |
 | End the reading | ✕ | menu-bar icon → Stop Reading | |
 | Speed, 1× to 5× in steps of 0.1 | slide the wheel | slide or scroll the wheel | |
 | Voice | — | voice menu (bottom left) | — |

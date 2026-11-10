@@ -16,6 +16,30 @@ final class SpeedWheelView: NSView {
     private var lastMoveTime: TimeInterval = 0
     private var momentum: Timer?
 
+    /// When true, the marker keeps its usual distance from the right edge and the left side
+    /// is cut short instead, so the wheel can give up room (to the Read button) without
+    /// the rest of the bar changing.
+    var trimsLeft = false {
+        didSet { if trimsLeft != oldValue { needsDisplay = true } }
+    }
+    /// Half the wheel's width the last time it was laid out untrimmed: how far the
+    /// ticks reach to the right of the marker.
+    private var fullReach: CGFloat = 0
+    /// Room kept left of the marker even when trimmed, for the bold current speed and a few slower ticks.
+    private let minLeft: CGFloat = 24
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if !trimsLeft { fullReach = newSize.width / 2 }
+    }
+
+    /// Where the fixed green marker sits.
+    private var markerX: CGFloat {
+        let mid = bounds.midX
+        guard trimsLeft, fullReach > 0 else { return mid }
+        return min(mid, max(minLeft, bounds.width - fullReach))
+    }
+
     var value: Double = 1 {
         didSet {
             guard value != oldValue else { return }
@@ -40,7 +64,10 @@ final class SpeedWheelView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        let h = bounds.height, mid = bounds.midX
+        let h = bounds.height, mid = markerX
+        // Ticks fade by the same distance on both sides, so a trimmed wheel looks like the
+        // full one with its left end cut off.
+        let reach = max(1, bounds.width - mid)
         let labelHeight: CGFloat = isTouchBar ? 11 : 14
         let tickBottom = labelHeight + 1
         let tickTop = h - (isTouchBar ? 7 : 9)
@@ -51,7 +78,7 @@ final class SpeedWheelView: NSView {
             let v = Double(tenth) / 10
             let x = mid + CGFloat((v - exact) * 10) * stepWidth
             guard x > -2, x < bounds.width + 2, abs(x - mid) > 1 else { continue }
-            let fade = max(0.12, 1 - abs(x - mid) / (bounds.width / 2))
+            let fade = max(0.12, 1 - abs(x - mid) / reach)
             let major = tenth % 5 == 0
             let height = (tickTop - tickBottom) * (major ? 1 : 0.68)
             let y = tickBottom + (tickTop - tickBottom - height) / 2

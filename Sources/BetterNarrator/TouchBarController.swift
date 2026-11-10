@@ -71,14 +71,14 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         w.onChange = { Settings.shared.speed = $0 }
         // With a reading open, the wheel takes up all the free space, so the buttons to its
         // right always end at the bar's right edge, whatever fits on the left.
-        w.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        w.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         w.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return w
     }()
     private lazy var wheelFixedWidth = wheel.widthAnchor.constraint(equalToConstant: 190)
     private lazy var muteButton = symbolButton("speaker.slash.fill", #selector(muteTapped), width: 44)
     private lazy var volumeButton = symbolButton("speaker.wave.2.fill", #selector(volumeTapped), width: 44)
-    private lazy var windowButton = symbolButton("doc.plaintext", #selector(windowTapped), width: 44)
+    private lazy var windowButton = symbolButton("doc.plaintext", #selector(windowTapped), width: 52)
     private lazy var copiedLabel: NSTextField = {
         let l = NSTextField(labelWithString: "")
         l.textColor = .secondaryLabelColor
@@ -87,13 +87,13 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         l.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         return l
     }()
-    private lazy var dismissButton = symbolButton("xmark", #selector(dismissTapped), width: 44)
-    private lazy var backButton = symbolButton("gobackward.15", #selector(backTapped), width: 50)
-    private lazy var forwardButton = symbolButton("goforward.15", #selector(forwardTapped), width: 50)
+    private lazy var dismissButton = symbolButton("xmark", #selector(dismissTapped), width: 52)
+    private lazy var backButton = symbolButton("gobackward.15", #selector(backTapped), width: 58)
+    private lazy var forwardButton = symbolButton("goforward.15", #selector(forwardTapped), width: 58)
     private lazy var playButton: NSButton = {
         let b = NSButton(title: "", target: self, action: #selector(playTapped))
         b.imagePosition = .imageOnly
-        b.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        b.widthAnchor.constraint(equalToConstant: 74).isActive = true
         return b
     }()
 
@@ -187,7 +187,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         rebuild()
     }
 
-    /// Shows whether the reading window is open.
+    /// Shows whether the reading window is open and in front (lit) or put away or behind
+    /// another window (plain), so one press always does the obvious thing.
     func setWindowShown(_ shown: Bool) {
         windowButton.image = NSImage(systemSymbolName: shown ? "doc.plaintext.fill" : "doc.plaintext", accessibilityDescription: nil)
         windowButton.bezelColor = shown ? .systemBlue : nil
@@ -195,12 +196,13 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     private func rebuild() {
         // Read sits at the far right, and only when there's something to press it for.
-        // Once pressed it goes: the play button shows the progress. Without it, the
-        // reading controls spread out.
+        // Once pressed it goes: the play button shows the progress.
         let showRead = offerText != nil && !processing
         // While a highlight is being copied there's no reading yet, but the controls show anyway.
         let showControls = session != nil || processing
-        setRoomy(!showRead)
+        // Read's room comes out of the slower (left) end of the wheel, so the buttons keep
+        // their size and place and the faster speeds stay where they were.
+        wheel.trimsLeft = showRead && showControls && expanded == nil
         // An open slider takes the free space itself, so it needs no flexible space beside it.
         var ids: [NSTouchBarItem.Identifier] = (catView != nil ? [ID.cat] : []) + systemStrip
         if expanded == nil && !showControls { ids.append(.flexibleSpace) }
@@ -222,17 +224,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         refreshRead()
         refreshControls()
         if !presented { present() }
-    }
-
-    private func setRoomy(_ roomy: Bool) {
-        func setWidth(_ view: NSView, _ width: CGFloat) {
-            view.constraints.first { $0.firstAttribute == .width && $0.secondItem == nil }?.constant = width
-        }
-        setWidth(windowButton, roomy ? 52 : 44)
-        setWidth(dismissButton, roomy ? 52 : 44)
-        setWidth(backButton, roomy ? 58 : 50)
-        setWidth(forwardButton, roomy ? 58 : 50)
-        setWidth(playButton, roomy ? 74 : 64)
     }
 
     private func refreshRead() {
