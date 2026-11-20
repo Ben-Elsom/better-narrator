@@ -34,6 +34,7 @@ Use the **On/Off** switch in the home window (or *Turn Off Better Narrator* in t
 - The **menu-bar icon** also has *Read Clipboard Aloud*, *Read Selected Text* (⌃⌥R), the voice and speed, and *Show Touch Bar Controls* if they ever disappear.
 - **Highlights keep their formatting:** pressing Read on a highlight copies it (then puts your clipboard back), so headings, lists, paragraphs and code come through. Better Narrator doesn't ask web-based apps like Claude to turn on their extra accessibility data, which would cost them CPU.
 - **When Read is offered:** in apps that don't say what's highlighted, such as Claude, a drag or double-click only counts if the text cursor showed, and Shift only counts with an arrow, Home, End, Page Up or Page Down. If an app rewrites the clipboard with the same text, Read stays away unless you clicked or pressed ⌘C or ⌘X in the last 2 seconds.
+- **Claude Code replies:** Claude's Copy button copies a whole turn, including the progress notes between tool calls. Better Narrator finds that turn in the session files Claude Code keeps on this Mac (`~/.claude/projects/`, the 8 most recently changed sessions) and reads only the final answer. Anything else, such as a highlight of part of a reply, a copy from regular Claude chat, or text from another app, is read as copied. Each copy's outcome is logged to `~/Library/Logs/BetterNarrator.log`. Regular Claude chat isn't saved on this Mac, so its replies can't be trimmed, even when they include progress notes.
 - **Text clean-up:** Markdown symbols aren't read out, code blocks are announced as "Code snippet", and passwords copied from a password manager are ignored.
 
 ### Permissions
@@ -68,6 +69,7 @@ The script compiles the app with `swiftc`, draws the icons, bundles the model, s
 
 - `Sources/BetterNarrator/`: the Swift app (window, audio, Touch Bar, menu bar, clipboard)
 - `Sources/TouchBarPrivate/`: the small Objective-C bridge to the unofficial Touch Bar calls
+- `Sources/BetterNarrator/ClaudeTranscript.swift`: matches a copied Claude Code turn to its session file and keeps the final answer
 - `engine/narrator_engine.py`: the Kokoro speech engine. It streams audio sentence by sentence with word timings over stdin/stdout.
 - `scripts/make_icons.swift`: draws the app and menu-bar icons
 - `experiments/touchbar_test/`: the original Touch Bar takeover test

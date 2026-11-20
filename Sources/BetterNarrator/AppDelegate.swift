@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         clipboard.onCopy = { [weak self] copied in
             Log.info("copy seen (\(copied.text.count) chars\(copied.html != nil ? ", formatted" : "")), offering Read")
+            ClaudeTranscript.prepare()
             self?.offer(.copied(copied), preview: ReadingDocument(markdown: copied.text).plainText)
         }
         clipboard.start()
@@ -139,11 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         touchBar.withdrawOffer()
         switch p {
         case .copied(let copied):
-            openReading(copied.forReading)
+            openCopied(copied)
         case .selection(let known):
             // Copy the highlight so its headings, lists and paragraphs come with it.
             clipboard.copySelection { [weak self] copied in
-                if let copied { self?.openReading(copied.forReading) }
+                if let copied { self?.openCopied(copied) }
                 else if let known { self?.openReading(known) }
                 else { self?.touchBar.setProcessing(false); NSSound.beep() }
             }
@@ -153,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func readClipboard() {
         guard Settings.shared.enabled else { NSSound.beep(); return }
         guard let copied = ClipboardWatcher.read() else { NSSound.beep(); return }
-        openReading(copied.forReading)
+        openCopied(copied)
     }
 
     // MARK: - On / Off
@@ -187,7 +188,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard Settings.shared.enabled else { NSSound.beep(); return }
         clipboard.copySelection { [weak self] copied in
             guard let copied else { NSSound.beep(); return }
-            self?.openReading(copied.forReading)
+            self?.openCopied(copied)
+        }
+    }
+
+    /// Reads copied text, cut down to the final answer when it's a whole Claude
+    /// Code turn (progress notes and all). Matching reads the session files, so
+    /// it runs off the main thread.
+    private func openCopied(_ copied: CopiedText) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let answer = ClaudeTranscript.finalAnswer(for: copied.text)
+            DispatchQueue.main.async { [weak self] in self?.openReading(answer ?? copied.forReading) }
         }
     }
 
